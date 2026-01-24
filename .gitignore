@@ -9,6 +9,10 @@ node_modules/
 
 # Build outputs
 dist/
+bin/
+*.exe
+coverage.out
+coverage.html
 
 # Environment files
 .env

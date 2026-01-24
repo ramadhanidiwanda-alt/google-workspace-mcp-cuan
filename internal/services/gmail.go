@@ -1,0 +1,469 @@
+// Copyright 2025 Google LLC
+// SPDX-License-Identifier: Apache-2.0
+
+package services
+
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/oowada/google-workspace-mcp/internal/util"
+	"google.golang.org/api/gmail/v1"
+)
+
+// GmailService provides Gmail operations
+type GmailService struct {
+	auth AuthProvider
+}
+
+// NewGmailService creates a new GmailService instance
+func NewGmailService(auth AuthProvider) *GmailService {
+	return &GmailService{auth: auth}
+}
+
+// getGmailClient returns an authenticated Gmail client
+func (s *GmailService) getGmailClient(ctx context.Context) (*gmail.Service, error) {
+	opt, err := s.auth.GetClientOption(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return gmail.NewService(ctx, opt)
+}
+
+// SearchInput contains input for Search
+type GmailSearchInput struct {
+	Query            string   `json:"query,omitempty" jsonschema:"Gmail search query syntax"`
+	MaxResults       *int     `json:"maxResults,omitempty" jsonschema:"Maximum number of results"`
+	PageToken        *string  `json:"pageToken,omitempty" jsonschema:"Token for pagination"`
+	LabelIDs         []string `json:"labelIds,omitempty" jsonschema:"Filter by label IDs"`
+	IncludeSpamTrash *bool    `json:"includeSpamTrash,omitempty" jsonschema:"Include spam and trash messages"`
+}
+
+// Search searches for emails
+func (s *GmailService) Search(ctx context.Context, input GmailSearchInput) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	req := client.Users.Messages.List("me")
+
+	if input.Query != "" {
+		req.Q(input.Query)
+	}
+
+	if input.MaxResults != nil {
+		req.MaxResults(int64(*input.MaxResults))
+	} else {
+		req.MaxResults(20)
+	}
+
+	if input.PageToken != nil && *input.PageToken != "" {
+		req.PageToken(*input.PageToken)
+	}
+
+	if len(input.LabelIDs) > 0 {
+		req.LabelIds(input.LabelIDs...)
+	}
+
+	if input.IncludeSpamTrash != nil && *input.IncludeSpamTrash {
+		req.IncludeSpamTrash(true)
+	}
+
+	result, err := req.Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	messages := make([]map[string]string, len(result.Messages))
+	for i, msg := range result.Messages {
+		messages[i] = map[string]string{
+			"id":       msg.Id,
+			"threadId": msg.ThreadId,
+		}
+	}
+
+	response := map[string]interface{}{
+		"messages":           messages,
+		"resultSizeEstimate": result.ResultSizeEstimate,
+	}
+	if result.NextPageToken != "" {
+		response["nextPageToken"] = result.NextPageToken
+	}
+
+	return JSONResponse(response)
+}
+
+// Get retrieves a specific message
+func (s *GmailService) Get(ctx context.Context, messageID string, format *string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	msgFormat := "full"
+	if format != nil && *format != "" {
+		msgFormat = *format
+	}
+
+	msg, err := client.Users.Messages.Get("me", messageID).Format(msgFormat).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Extract headers
+	headers := make(map[string]string)
+	for _, h := range msg.Payload.Headers {
+		switch strings.ToLower(h.Name) {
+		case "from", "to", "subject", "date", "cc", "bcc":
+			headers[h.Name] = h.Value
+		}
+	}
+
+	// Extract body
+	body := extractMessageBody(msg.Payload)
+
+	// Extract attachments info
+	attachments := extractAttachmentInfo(msg.Payload)
+
+	return JSONResponse(map[string]interface{}{
+		"id":          msg.Id,
+		"threadId":    msg.ThreadId,
+		"labelIds":    msg.LabelIds,
+		"snippet":     msg.Snippet,
+		"headers":     headers,
+		"body":        body,
+		"attachments": attachments,
+	})
+}
+
+// DownloadAttachment downloads an email attachment
+func (s *GmailService) DownloadAttachment(ctx context.Context, messageID string, attachmentID string, localPath string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	if !filepath.IsAbs(localPath) {
+		return ErrorResponse(fmt.Errorf("localPath must be an absolute path"))
+	}
+
+	attachment, err := client.Users.Messages.Attachments.Get("me", messageID, attachmentID).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Decode base64url data
+	data, err := base64.URLEncoding.DecodeString(attachment.Data)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Ensure directory exists
+	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Write file
+	if err := os.WriteFile(localPath, data, 0644); err != nil {
+		return ErrorResponse(err)
+	}
+
+	util.LogDebug("Downloaded attachment to %s (%d bytes)", localPath, len(data))
+
+	return JSONResponse(map[string]interface{}{
+		"localPath": localPath,
+		"size":      len(data),
+	})
+}
+
+// Modify modifies message labels
+func (s *GmailService) Modify(ctx context.Context, messageID string, addLabelIDs []string, removeLabelIDs []string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	_, err = client.Users.Messages.Modify("me", messageID, &gmail.ModifyMessageRequest{
+		AddLabelIds:    addLabelIDs,
+		RemoveLabelIds: removeLabelIDs,
+	}).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]string{
+		"status":    "success",
+		"messageId": messageID,
+	})
+}
+
+// SendEmailInput contains input for Send
+type SendEmailInput struct {
+	To      []string `json:"to" jsonschema:"Recipient email addresses"`
+	Subject string   `json:"subject" jsonschema:"Email subject line"`
+	Body    string   `json:"body" jsonschema:"Email body content"`
+	CC      []string `json:"cc,omitempty" jsonschema:"CC recipient email addresses"`
+	BCC     []string `json:"bcc,omitempty" jsonschema:"BCC recipient email addresses"`
+	IsHTML  *bool    `json:"isHtml,omitempty" jsonschema:"Whether body is HTML content"`
+}
+
+// SearchSimple searches for emails with simple parameters
+func (s *GmailService) SearchSimple(ctx context.Context, query string, maxResults *int, pageToken *string) ToolResponse {
+	return s.Search(ctx, GmailSearchInput{
+		Query:      query,
+		MaxResults: maxResults,
+		PageToken:  pageToken,
+	})
+}
+
+// SendSimple sends an email with simple parameters
+func (s *GmailService) SendSimple(ctx context.Context, to, subject, body string, cc, bcc, threadID, inReplyTo *string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Build MIME message
+	var msg strings.Builder
+	msg.WriteString(fmt.Sprintf("To: %s\r\n", to))
+	if cc != nil && *cc != "" {
+		msg.WriteString(fmt.Sprintf("Cc: %s\r\n", *cc))
+	}
+	if bcc != nil && *bcc != "" {
+		msg.WriteString(fmt.Sprintf("Bcc: %s\r\n", *bcc))
+	}
+	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	if inReplyTo != nil && *inReplyTo != "" {
+		msg.WriteString(fmt.Sprintf("In-Reply-To: %s\r\n", *inReplyTo))
+		msg.WriteString(fmt.Sprintf("References: %s\r\n", *inReplyTo))
+	}
+	msg.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+	msg.WriteString("\r\n")
+	msg.WriteString(body)
+
+	raw := base64.URLEncoding.EncodeToString([]byte(msg.String()))
+
+	message := &gmail.Message{Raw: raw}
+	if threadID != nil && *threadID != "" {
+		message.ThreadId = *threadID
+	}
+
+	result, err := client.Users.Messages.Send("me", message).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]string{
+		"messageId": result.Id,
+		"threadId":  result.ThreadId,
+	})
+}
+
+// CreateDraftSimple creates an email draft with simple parameters
+func (s *GmailService) CreateDraftSimple(ctx context.Context, to, subject, body string, cc, bcc *string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	var msg strings.Builder
+	msg.WriteString(fmt.Sprintf("To: %s\r\n", to))
+	if cc != nil && *cc != "" {
+		msg.WriteString(fmt.Sprintf("Cc: %s\r\n", *cc))
+	}
+	if bcc != nil && *bcc != "" {
+		msg.WriteString(fmt.Sprintf("Bcc: %s\r\n", *bcc))
+	}
+	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	msg.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+	msg.WriteString("\r\n")
+	msg.WriteString(body)
+
+	raw := base64.URLEncoding.EncodeToString([]byte(msg.String()))
+
+	result, err := client.Users.Drafts.Create("me", &gmail.Draft{
+		Message: &gmail.Message{Raw: raw},
+	}).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]string{
+		"draftId":   result.Id,
+		"messageId": result.Message.Id,
+	})
+}
+
+// Send sends an email
+func (s *GmailService) Send(ctx context.Context, input SendEmailInput) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Build MIME message
+	contentType := "text/plain"
+	if input.IsHTML != nil && *input.IsHTML {
+		contentType = "text/html"
+	}
+
+	var msg strings.Builder
+	msg.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(input.To, ", ")))
+	if len(input.CC) > 0 {
+		msg.WriteString(fmt.Sprintf("Cc: %s\r\n", strings.Join(input.CC, ", ")))
+	}
+	if len(input.BCC) > 0 {
+		msg.WriteString(fmt.Sprintf("Bcc: %s\r\n", strings.Join(input.BCC, ", ")))
+	}
+	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", input.Subject))
+	msg.WriteString(fmt.Sprintf("Content-Type: %s; charset=UTF-8\r\n", contentType))
+	msg.WriteString("\r\n")
+	msg.WriteString(input.Body)
+
+	raw := base64.URLEncoding.EncodeToString([]byte(msg.String()))
+
+	result, err := client.Users.Messages.Send("me", &gmail.Message{
+		Raw: raw,
+	}).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]string{
+		"messageId": result.Id,
+		"threadId":  result.ThreadId,
+	})
+}
+
+// CreateDraft creates an email draft
+func (s *GmailService) CreateDraft(ctx context.Context, input SendEmailInput) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Build MIME message (same as Send)
+	contentType := "text/plain"
+	if input.IsHTML != nil && *input.IsHTML {
+		contentType = "text/html"
+	}
+
+	var msg strings.Builder
+	msg.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(input.To, ", ")))
+	if len(input.CC) > 0 {
+		msg.WriteString(fmt.Sprintf("Cc: %s\r\n", strings.Join(input.CC, ", ")))
+	}
+	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", input.Subject))
+	msg.WriteString(fmt.Sprintf("Content-Type: %s; charset=UTF-8\r\n", contentType))
+	msg.WriteString("\r\n")
+	msg.WriteString(input.Body)
+
+	raw := base64.URLEncoding.EncodeToString([]byte(msg.String()))
+
+	result, err := client.Users.Drafts.Create("me", &gmail.Draft{
+		Message: &gmail.Message{Raw: raw},
+	}).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]string{
+		"draftId":   result.Id,
+		"messageId": result.Message.Id,
+	})
+}
+
+// SendDraft sends a previously created draft
+func (s *GmailService) SendDraft(ctx context.Context, draftID string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	result, err := client.Users.Drafts.Send("me", &gmail.Draft{
+		Id: draftID,
+	}).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]string{
+		"messageId": result.Id,
+		"threadId":  result.ThreadId,
+	})
+}
+
+// ListLabels lists all Gmail labels
+func (s *GmailService) ListLabels(ctx context.Context) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	result, err := client.Users.Labels.List("me").Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	labels := make([]map[string]interface{}, len(result.Labels))
+	for i, label := range result.Labels {
+		labels[i] = map[string]interface{}{
+			"id":                    label.Id,
+			"name":                  label.Name,
+			"type":                  label.Type,
+			"messageListVisibility": label.MessageListVisibility,
+			"labelListVisibility":   label.LabelListVisibility,
+		}
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"labels": labels,
+	})
+}
+
+// Helper functions
+
+func extractMessageBody(payload *gmail.MessagePart) string {
+	if payload.Body != nil && payload.Body.Data != "" {
+		data, err := base64.URLEncoding.DecodeString(payload.Body.Data)
+		if err == nil {
+			return string(data)
+		}
+	}
+
+	// Check parts recursively
+	for _, part := range payload.Parts {
+		if strings.HasPrefix(part.MimeType, "text/") {
+			body := extractMessageBody(part)
+			if body != "" {
+				return body
+			}
+		}
+	}
+
+	return ""
+}
+
+func extractAttachmentInfo(payload *gmail.MessagePart) []map[string]interface{} {
+	var attachments []map[string]interface{}
+
+	if payload.Filename != "" && payload.Body != nil && payload.Body.AttachmentId != "" {
+		attachments = append(attachments, map[string]interface{}{
+			"filename":     payload.Filename,
+			"mimeType":     payload.MimeType,
+			"attachmentId": payload.Body.AttachmentId,
+			"size":         payload.Body.Size,
+		})
+	}
+
+	for _, part := range payload.Parts {
+		attachments = append(attachments, extractAttachmentInfo(part)...)
+	}
+
+	return attachments
+}
