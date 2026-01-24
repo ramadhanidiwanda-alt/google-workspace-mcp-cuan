@@ -66,6 +66,9 @@ type CreateEventInput struct {
 	Start       string   `json:"start" jsonschema:"Start time in ISO8601 datetime format"`
 	End         string   `json:"end" jsonschema:"End time in ISO8601 datetime format"`
 	Attendees   []string `json:"attendees,omitempty" jsonschema:"Email addresses of attendees"`
+	AddMeet     bool     `json:"addMeet,omitempty" jsonschema:"Add Google Meet video conference"`
+	Location    *string  `json:"location,omitempty" jsonschema:"Event location"`
+	Recurrence  []string `json:"recurrence,omitempty" jsonschema:"Recurrence rules (RRULE format)"`
 }
 
 // CreateEvent creates a new calendar event
@@ -80,18 +83,31 @@ func (s *CalendarService) CreateEvent(ctx context.Context, input CreateEventInpu
 		calendarID = *input.CalendarID
 	}
 
+	// Get user's timezone from calendar settings
+	calSettings, err := client.CalendarList.Get(calendarID).Do()
+	timeZone := "UTC"
+	if err == nil && calSettings.TimeZone != "" {
+		timeZone = calSettings.TimeZone
+	}
+
 	event := &calendar.Event{
 		Summary: input.Summary,
 		Start: &calendar.EventDateTime{
 			DateTime: input.Start,
+			TimeZone: timeZone,
 		},
 		End: &calendar.EventDateTime{
 			DateTime: input.End,
+			TimeZone: timeZone,
 		},
 	}
 
 	if input.Description != nil {
 		event.Description = *input.Description
+	}
+
+	if input.Location != nil {
+		event.Location = *input.Location
 	}
 
 	if len(input.Attendees) > 0 {
@@ -102,16 +118,69 @@ func (s *CalendarService) CreateEvent(ctx context.Context, input CreateEventInpu
 		event.Attendees = attendees
 	}
 
-	result, err := client.Events.Insert(calendarID, event).Do()
+	// Add recurrence rules if specified
+	if len(input.Recurrence) > 0 {
+		event.Recurrence = input.Recurrence
+	}
+
+	// Add Google Meet conference if requested
+	if input.AddMeet {
+		event.ConferenceData = &calendar.ConferenceData{
+			CreateRequest: &calendar.CreateConferenceRequest{
+				RequestId: fmt.Sprintf("meet-%d", time.Now().UnixNano()),
+				ConferenceSolutionKey: &calendar.ConferenceSolutionKey{
+					Type: "hangoutsMeet",
+				},
+			},
+		}
+	}
+
+	insertCall := client.Events.Insert(calendarID, event)
+	if input.AddMeet {
+		insertCall = insertCall.ConferenceDataVersion(1)
+	}
+
+	result, err := insertCall.Do()
 	if err != nil {
 		return ErrorResponse(err)
 	}
 
-	return JSONResponse(map[string]string{
-		"eventId":     result.Id,
-		"summary":     result.Summary,
-		"htmlLink":    result.HtmlLink,
-		"status":      result.Status,
+	response := map[string]interface{}{
+		"eventId":  result.Id,
+		"summary":  result.Summary,
+		"htmlLink": result.HtmlLink,
+		"status":   result.Status,
+	}
+
+	// Include Meet link if available
+	if result.ConferenceData != nil && len(result.ConferenceData.EntryPoints) > 0 {
+		for _, ep := range result.ConferenceData.EntryPoints {
+			if ep.EntryPointType == "video" {
+				response["meetLink"] = ep.Uri
+				break
+			}
+		}
+	}
+
+	return JSONResponse(response)
+}
+
+// CreateMeetingWithMeet creates a calendar event with Google Meet link
+func (s *CalendarService) CreateMeetingWithMeet(ctx context.Context, summary, start, end string, calendarID, description, attendees *string) ToolResponse {
+	var attendeeList []string
+	if attendees != nil && *attendees != "" {
+		for _, email := range strings.Split(*attendees, ",") {
+			attendeeList = append(attendeeList, strings.TrimSpace(email))
+		}
+	}
+	return s.CreateEvent(ctx, CreateEventInput{
+		CalendarID:  calendarID,
+		Summary:     summary,
+		Description: description,
+		Start:       start,
+		End:         end,
+		Attendees:   attendeeList,
+		AddMeet:     true,
 	})
 }
 
@@ -397,6 +466,53 @@ func (s *CalendarService) FindFreeTimeSimple(ctx context.Context, attendees, tim
 		TimeMin:      timeMin,
 		TimeMax:      timeMax,
 		DurationMins: durationMinutes,
+	})
+}
+
+// CreateRecurringEvent creates a recurring calendar event
+func (s *CalendarService) CreateRecurringEvent(ctx context.Context, summary, start, end string, recurrence string, calendarID, description, location, attendees *string) ToolResponse {
+	var attendeeList []string
+	if attendees != nil && *attendees != "" {
+		for _, email := range strings.Split(*attendees, ",") {
+			attendeeList = append(attendeeList, strings.TrimSpace(email))
+		}
+	}
+
+	// Parse recurrence rule - support simple format like "DAILY", "WEEKLY", "MONTHLY", "YEARLY"
+	// or full RRULE format
+	var recurrenceRules []string
+	if recurrence != "" {
+		if strings.HasPrefix(strings.ToUpper(recurrence), "RRULE:") {
+			recurrenceRules = []string{recurrence}
+		} else {
+			// Simple format conversion
+			upper := strings.ToUpper(recurrence)
+			switch {
+			case strings.HasPrefix(upper, "DAILY"):
+				recurrenceRules = []string{"RRULE:FREQ=DAILY"}
+			case strings.HasPrefix(upper, "WEEKLY"):
+				recurrenceRules = []string{"RRULE:FREQ=WEEKLY"}
+			case strings.HasPrefix(upper, "MONTHLY"):
+				recurrenceRules = []string{"RRULE:FREQ=MONTHLY"}
+			case strings.HasPrefix(upper, "YEARLY"):
+				recurrenceRules = []string{"RRULE:FREQ=YEARLY"}
+			case strings.HasPrefix(upper, "WEEKDAYS"):
+				recurrenceRules = []string{"RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"}
+			default:
+				recurrenceRules = []string{"RRULE:" + recurrence}
+			}
+		}
+	}
+
+	return s.CreateEvent(ctx, CreateEventInput{
+		CalendarID:  calendarID,
+		Summary:     summary,
+		Description: description,
+		Location:    location,
+		Start:       start,
+		End:         end,
+		Attendees:   attendeeList,
+		Recurrence:  recurrenceRules,
 	})
 }
 

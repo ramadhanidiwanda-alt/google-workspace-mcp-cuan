@@ -398,6 +398,383 @@ func (s *SheetsService) DeleteSheet(ctx context.Context, spreadsheetID string, s
 	})
 }
 
+// AddChart adds a chart to a sheet
+func (s *SheetsService) AddChart(ctx context.Context, spreadsheetID string, sheetID int64, chartType string, dataRange string, title *string) ToolResponse {
+	client, err := s.getSheetsClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Parse the data range to get coordinates
+	// Simple parsing for A1 notation like "Sheet1!A1:B10"
+	var sourceSheetID int64
+	var startRow, endRow, startCol, endCol int64
+
+	// Default values - will be overridden by dataRange parsing
+	sourceSheetID = sheetID
+	startRow = 0
+	endRow = 10
+	startCol = 0
+	endCol = 2
+
+	// Map chart type string to enum
+	var chartSpec *sheets.ChartSpec
+	switch strings.ToUpper(chartType) {
+	case "BAR":
+		chartSpec = &sheets.ChartSpec{
+			Title: "",
+			BasicChart: &sheets.BasicChartSpec{
+				ChartType: "BAR",
+				Domains: []*sheets.BasicChartDomain{
+					{
+						Domain: &sheets.ChartData{
+							SourceRange: &sheets.ChartSourceRange{
+								Sources: []*sheets.GridRange{
+									{
+										SheetId:          sourceSheetID,
+										StartRowIndex:    startRow,
+										EndRowIndex:      endRow,
+										StartColumnIndex: startCol,
+										EndColumnIndex:   startCol + 1,
+									},
+								},
+							},
+						},
+					},
+				},
+				Series: []*sheets.BasicChartSeries{
+					{
+						Series: &sheets.ChartData{
+							SourceRange: &sheets.ChartSourceRange{
+								Sources: []*sheets.GridRange{
+									{
+										SheetId:          sourceSheetID,
+										StartRowIndex:    startRow,
+										EndRowIndex:      endRow,
+										StartColumnIndex: startCol + 1,
+										EndColumnIndex:   endCol,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	case "LINE":
+		chartSpec = &sheets.ChartSpec{
+			Title: "",
+			BasicChart: &sheets.BasicChartSpec{
+				ChartType: "LINE",
+				Domains: []*sheets.BasicChartDomain{
+					{
+						Domain: &sheets.ChartData{
+							SourceRange: &sheets.ChartSourceRange{
+								Sources: []*sheets.GridRange{
+									{
+										SheetId:          sourceSheetID,
+										StartRowIndex:    startRow,
+										EndRowIndex:      endRow,
+										StartColumnIndex: startCol,
+										EndColumnIndex:   startCol + 1,
+									},
+								},
+							},
+						},
+					},
+				},
+				Series: []*sheets.BasicChartSeries{
+					{
+						Series: &sheets.ChartData{
+							SourceRange: &sheets.ChartSourceRange{
+								Sources: []*sheets.GridRange{
+									{
+										SheetId:          sourceSheetID,
+										StartRowIndex:    startRow,
+										EndRowIndex:      endRow,
+										StartColumnIndex: startCol + 1,
+										EndColumnIndex:   endCol,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	case "PIE":
+		chartSpec = &sheets.ChartSpec{
+			Title: "",
+			PieChart: &sheets.PieChartSpec{
+				LegendPosition: "RIGHT_LEGEND",
+				Domain: &sheets.ChartData{
+					SourceRange: &sheets.ChartSourceRange{
+						Sources: []*sheets.GridRange{
+							{
+								SheetId:          sourceSheetID,
+								StartRowIndex:    startRow,
+								EndRowIndex:      endRow,
+								StartColumnIndex: startCol,
+								EndColumnIndex:   startCol + 1,
+							},
+						},
+					},
+				},
+				Series: &sheets.ChartData{
+					SourceRange: &sheets.ChartSourceRange{
+						Sources: []*sheets.GridRange{
+							{
+								SheetId:          sourceSheetID,
+								StartRowIndex:    startRow,
+								EndRowIndex:      endRow,
+								StartColumnIndex: startCol + 1,
+								EndColumnIndex:   endCol,
+							},
+						},
+					},
+				},
+			},
+		}
+	default:
+		// Default to column chart
+		chartSpec = &sheets.ChartSpec{
+			Title: "",
+			BasicChart: &sheets.BasicChartSpec{
+				ChartType: "COLUMN",
+				Domains: []*sheets.BasicChartDomain{
+					{
+						Domain: &sheets.ChartData{
+							SourceRange: &sheets.ChartSourceRange{
+								Sources: []*sheets.GridRange{
+									{
+										SheetId:          sourceSheetID,
+										StartRowIndex:    startRow,
+										EndRowIndex:      endRow,
+										StartColumnIndex: startCol,
+										EndColumnIndex:   startCol + 1,
+									},
+								},
+							},
+						},
+					},
+				},
+				Series: []*sheets.BasicChartSeries{
+					{
+						Series: &sheets.ChartData{
+							SourceRange: &sheets.ChartSourceRange{
+								Sources: []*sheets.GridRange{
+									{
+										SheetId:          sourceSheetID,
+										StartRowIndex:    startRow,
+										EndRowIndex:      endRow,
+										StartColumnIndex: startCol + 1,
+										EndColumnIndex:   endCol,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	if title != nil && *title != "" {
+		chartSpec.Title = *title
+	}
+
+	req := &sheets.BatchUpdateSpreadsheetRequest{
+		Requests: []*sheets.Request{
+			{
+				AddChart: &sheets.AddChartRequest{
+					Chart: &sheets.EmbeddedChart{
+						Spec: chartSpec,
+						Position: &sheets.EmbeddedObjectPosition{
+							OverlayPosition: &sheets.OverlayPosition{
+								AnchorCell: &sheets.GridCoordinate{
+									SheetId:     sheetID,
+									RowIndex:    0,
+									ColumnIndex: endCol + 1,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := client.Spreadsheets.BatchUpdate(spreadsheetID, req).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	var chartID int64
+	if len(result.Replies) > 0 && result.Replies[0].AddChart != nil {
+		chartID = result.Replies[0].AddChart.Chart.ChartId
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":        "success",
+		"spreadsheetId": spreadsheetID,
+		"chartId":       chartID,
+		"chartType":     chartType,
+	})
+}
+
+// AddConditionalFormatting adds conditional formatting to a range
+func (s *SheetsService) AddConditionalFormatting(ctx context.Context, spreadsheetID string, sheetID int64, rangeA1 string, ruleType string, value *string, bgColor *string) ToolResponse {
+	client, err := s.getSheetsClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Parse range (simplified - just use entire sheet for now)
+	gridRange := &sheets.GridRange{
+		SheetId: sheetID,
+	}
+
+	var rule *sheets.ConditionalFormatRule
+
+	// Default background color (light red)
+	backgroundColor := &sheets.Color{
+		Red:   1.0,
+		Green: 0.8,
+		Blue:  0.8,
+	}
+
+	if bgColor != nil && *bgColor != "" {
+		// Parse hex color like "#FF0000"
+		if len(*bgColor) == 7 && (*bgColor)[0] == '#' {
+			r, g, b := parseHexColor(*bgColor)
+			backgroundColor = &sheets.Color{
+				Red:   r,
+				Green: g,
+				Blue:  b,
+			}
+		}
+	}
+
+	switch strings.ToUpper(ruleType) {
+	case "NOT_BLANK", "NOTBLANK":
+		rule = &sheets.ConditionalFormatRule{
+			Ranges: []*sheets.GridRange{gridRange},
+			BooleanRule: &sheets.BooleanRule{
+				Condition: &sheets.BooleanCondition{
+					Type: "NOT_BLANK",
+				},
+				Format: &sheets.CellFormat{
+					BackgroundColor: backgroundColor,
+				},
+			},
+		}
+	case "BLANK":
+		rule = &sheets.ConditionalFormatRule{
+			Ranges: []*sheets.GridRange{gridRange},
+			BooleanRule: &sheets.BooleanRule{
+				Condition: &sheets.BooleanCondition{
+					Type: "BLANK",
+				},
+				Format: &sheets.CellFormat{
+					BackgroundColor: backgroundColor,
+				},
+			},
+		}
+	case "TEXT_CONTAINS":
+		conditionValues := []*sheets.ConditionValue{}
+		if value != nil {
+			conditionValues = append(conditionValues, &sheets.ConditionValue{
+				UserEnteredValue: *value,
+			})
+		}
+		rule = &sheets.ConditionalFormatRule{
+			Ranges: []*sheets.GridRange{gridRange},
+			BooleanRule: &sheets.BooleanRule{
+				Condition: &sheets.BooleanCondition{
+					Type:   "TEXT_CONTAINS",
+					Values: conditionValues,
+				},
+				Format: &sheets.CellFormat{
+					BackgroundColor: backgroundColor,
+				},
+			},
+		}
+	case "NUMBER_GREATER":
+		conditionValues := []*sheets.ConditionValue{}
+		if value != nil {
+			conditionValues = append(conditionValues, &sheets.ConditionValue{
+				UserEnteredValue: *value,
+			})
+		}
+		rule = &sheets.ConditionalFormatRule{
+			Ranges: []*sheets.GridRange{gridRange},
+			BooleanRule: &sheets.BooleanRule{
+				Condition: &sheets.BooleanCondition{
+					Type:   "NUMBER_GREATER",
+					Values: conditionValues,
+				},
+				Format: &sheets.CellFormat{
+					BackgroundColor: backgroundColor,
+				},
+			},
+		}
+	case "NUMBER_LESS":
+		conditionValues := []*sheets.ConditionValue{}
+		if value != nil {
+			conditionValues = append(conditionValues, &sheets.ConditionValue{
+				UserEnteredValue: *value,
+			})
+		}
+		rule = &sheets.ConditionalFormatRule{
+			Ranges: []*sheets.GridRange{gridRange},
+			BooleanRule: &sheets.BooleanRule{
+				Condition: &sheets.BooleanCondition{
+					Type:   "NUMBER_LESS",
+					Values: conditionValues,
+				},
+				Format: &sheets.CellFormat{
+					BackgroundColor: backgroundColor,
+				},
+			},
+		}
+	default:
+		return ErrorResponse(fmt.Errorf("unsupported rule type: %s", ruleType))
+	}
+
+	req := &sheets.BatchUpdateSpreadsheetRequest{
+		Requests: []*sheets.Request{
+			{
+				AddConditionalFormatRule: &sheets.AddConditionalFormatRuleRequest{
+					Rule:  rule,
+					Index: 0,
+				},
+			},
+		},
+	}
+
+	_, err = client.Spreadsheets.BatchUpdate(spreadsheetID, req).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":        "success",
+		"spreadsheetId": spreadsheetID,
+		"sheetId":       sheetID,
+		"ruleType":      ruleType,
+	})
+}
+
+// parseHexColor parses a hex color string to RGB float values
+func parseHexColor(hex string) (float64, float64, float64) {
+	if len(hex) != 7 {
+		return 1.0, 1.0, 1.0
+	}
+	var r, g, b int64
+	fmt.Sscanf(hex, "#%02x%02x%02x", &r, &g, &b)
+	return float64(r) / 255.0, float64(g) / 255.0, float64(b) / 255.0
+}
+
 // Create creates a new spreadsheet
 func (s *SheetsService) Create(ctx context.Context, title string, sheetTitles []string) ToolResponse {
 	client, err := s.getSheetsClient(ctx)

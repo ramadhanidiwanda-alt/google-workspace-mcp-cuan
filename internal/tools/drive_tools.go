@@ -269,4 +269,154 @@ func (r *ToolRegistrar) registerDriveTools() {
 			return mcp.NewToolResultText(resp.Content[0].Text), nil
 		},
 	)
+
+	// drive.exportFile
+	r.server.AddTool(
+		mcp.NewTool("drive.exportFile",
+			mcp.WithDescription("Exports a Google Workspace file (Docs, Sheets, Slides) to PDF or other formats."),
+			mcp.WithString("fileId", mcp.Required(), mcp.Description("The ID of the file to export")),
+			mcp.WithString("mimeType", mcp.Required(), mcp.Description("Export format MIME type (e.g., application/pdf)")),
+			mcp.WithString("localPath", mcp.Required(), mcp.Description("Local path to save the exported file")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			fileID := args["fileId"].(string)
+			mimeType := args["mimeType"].(string)
+			localPath := args["localPath"].(string)
+			resp := r.services.Drive.ExportFile(ctx, fileID, mimeType, localPath)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// drive.getExportFormats
+	r.server.AddTool(
+		mcp.NewTool("drive.getExportFormats",
+			mcp.WithDescription("Gets available export formats for a Google Workspace file."),
+			mcp.WithString("fileId", mcp.Required(), mcp.Description("The ID of the file")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			fileID := args["fileId"].(string)
+			resp := r.services.Drive.GetExportFormats(ctx, fileID)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// drive.listComments
+	r.server.AddTool(
+		mcp.NewTool("drive.listComments",
+			mcp.WithDescription("Lists comments on a file."),
+			mcp.WithString("fileId", mcp.Required(), mcp.Description("The ID of the file")),
+			mcp.WithString("pageToken", mcp.Description("Token for pagination")),
+			mcp.WithNumber("pageSize", mcp.Description("Number of results per page")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			fileID := args["fileId"].(string)
+			var pageToken *string
+			var pageSize *int
+			if v, ok := args["pageToken"].(string); ok && v != "" {
+				pageToken = &v
+			}
+			if v, ok := args["pageSize"].(float64); ok {
+				ps := int(v)
+				pageSize = &ps
+			}
+			resp := r.services.Drive.ListComments(ctx, fileID, pageToken, pageSize)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// drive.createComment
+	r.server.AddTool(
+		mcp.NewTool("drive.createComment",
+			mcp.WithDescription("Creates a comment on a file."),
+			mcp.WithString("fileId", mcp.Required(), mcp.Description("The ID of the file")),
+			mcp.WithString("content", mcp.Required(), mcp.Description("The comment content")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			fileID := args["fileId"].(string)
+			content := args["content"].(string)
+			resp := r.services.Drive.CreateComment(ctx, fileID, content)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// drive.replyToComment
+	r.server.AddTool(
+		mcp.NewTool("drive.replyToComment",
+			mcp.WithDescription("Replies to a comment on a file."),
+			mcp.WithString("fileId", mcp.Required(), mcp.Description("The ID of the file")),
+			mcp.WithString("commentId", mcp.Required(), mcp.Description("The ID of the comment")),
+			mcp.WithString("content", mcp.Required(), mcp.Description("The reply content")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			fileID := args["fileId"].(string)
+			commentID := args["commentId"].(string)
+			content := args["content"].(string)
+			resp := r.services.Drive.ReplyToComment(ctx, fileID, commentID, content)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// drive.resolveComment
+	r.server.AddTool(
+		mcp.NewTool("drive.resolveComment",
+			mcp.WithDescription("Resolves or reopens a comment."),
+			mcp.WithString("fileId", mcp.Required(), mcp.Description("The ID of the file")),
+			mcp.WithString("commentId", mcp.Required(), mcp.Description("The ID of the comment")),
+			mcp.WithBoolean("resolved", mcp.Required(), mcp.Description("True to resolve, false to reopen")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			fileID := args["fileId"].(string)
+			commentID := args["commentId"].(string)
+			resolved := args["resolved"].(bool)
+			resp := r.services.Drive.ResolveComment(ctx, fileID, commentID, resolved)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// drive.listRevisions
+	r.server.AddTool(
+		mcp.NewTool("drive.listRevisions",
+			mcp.WithDescription("Lists file revisions (version history)."),
+			mcp.WithString("fileId", mcp.Required(), mcp.Description("The ID of the file")),
+			mcp.WithString("pageToken", mcp.Description("Token for pagination")),
+			mcp.WithNumber("pageSize", mcp.Description("Number of results per page")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			fileID := args["fileId"].(string)
+			var pageToken *string
+			var pageSize *int
+			if v, ok := args["pageToken"].(string); ok && v != "" {
+				pageToken = &v
+			}
+			if v, ok := args["pageSize"].(float64); ok {
+				ps := int(v)
+				pageSize = &ps
+			}
+			resp := r.services.Drive.ListRevisions(ctx, fileID, pageToken, pageSize)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// drive.getRevision
+	r.server.AddTool(
+		mcp.NewTool("drive.getRevision",
+			mcp.WithDescription("Gets a specific file revision."),
+			mcp.WithString("fileId", mcp.Required(), mcp.Description("The ID of the file")),
+			mcp.WithString("revisionId", mcp.Required(), mcp.Description("The ID of the revision")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			fileID := args["fileId"].(string)
+			revisionID := args["revisionId"].(string)
+			resp := r.services.Drive.GetRevision(ctx, fileID, revisionID)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
 }

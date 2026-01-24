@@ -339,4 +339,111 @@ func (r *ToolRegistrar) registerGmailTools() {
 			return mcp.NewToolResultText(resp.Content[0].Text), nil
 		},
 	)
+
+	// gmail.listFilters
+	r.server.AddTool(
+		mcp.NewTool("gmail.listFilters",
+			mcp.WithDescription("Lists all Gmail filters."),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			resp := r.services.Gmail.ListFilters(ctx)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// gmail.createFilter
+	r.server.AddTool(
+		mcp.NewTool("gmail.createFilter",
+			mcp.WithDescription("Creates a new Gmail filter."),
+			mcp.WithString("from", mcp.Description("Filter emails from this sender")),
+			mcp.WithString("to", mcp.Description("Filter emails to this recipient")),
+			mcp.WithString("subject", mcp.Description("Filter emails with this subject")),
+			mcp.WithString("query", mcp.Description("Filter using Gmail search syntax")),
+			mcp.WithBoolean("hasAttachment", mcp.Description("Filter emails with attachments")),
+			mcp.WithString("addLabelIds", mcp.Description("Comma-separated label IDs to add")),
+			mcp.WithString("removeLabelIds", mcp.Description("Comma-separated label IDs to remove")),
+			mcp.WithString("forward", mcp.Description("Email address to forward to")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			var from, to, subject, query, forward *string
+			var hasAttachment *bool
+			var addLabelIDs, removeLabelIDs []string
+
+			if v, ok := args["from"].(string); ok && v != "" {
+				from = &v
+			}
+			if v, ok := args["to"].(string); ok && v != "" {
+				to = &v
+			}
+			if v, ok := args["subject"].(string); ok && v != "" {
+				subject = &v
+			}
+			if v, ok := args["query"].(string); ok && v != "" {
+				query = &v
+			}
+			if v, ok := args["hasAttachment"].(bool); ok {
+				hasAttachment = &v
+			}
+			if v, ok := args["addLabelIds"].(string); ok && v != "" {
+				addLabelIDs = strings.Split(v, ",")
+			}
+			if v, ok := args["removeLabelIds"].(string); ok && v != "" {
+				removeLabelIDs = strings.Split(v, ",")
+			}
+			if v, ok := args["forward"].(string); ok && v != "" {
+				forward = &v
+			}
+
+			resp := r.services.Gmail.CreateFilter(ctx, from, to, subject, query, hasAttachment, addLabelIDs, removeLabelIDs, forward)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// gmail.deleteFilter
+	r.server.AddTool(
+		mcp.NewTool("gmail.deleteFilter",
+			mcp.WithDescription("Deletes a Gmail filter."),
+			mcp.WithString("filterId", mcp.Required(), mcp.Description("The ID of the filter to delete")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			filterID := args["filterId"].(string)
+			resp := r.services.Gmail.DeleteFilter(ctx, filterID)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// gmail.getSendAs
+	r.server.AddTool(
+		mcp.NewTool("gmail.getSendAs",
+			mcp.WithDescription("Gets send-as settings (signature, etc.). Lists all if no email specified."),
+			mcp.WithString("sendAsEmail", mcp.Description("Specific send-as email to get")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			var sendAsEmail *string
+			if v, ok := args["sendAsEmail"].(string); ok && v != "" {
+				sendAsEmail = &v
+			}
+			resp := r.services.Gmail.GetSendAs(ctx, sendAsEmail)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// gmail.updateSignature
+	r.server.AddTool(
+		mcp.NewTool("gmail.updateSignature",
+			mcp.WithDescription("Updates the email signature for a send-as address."),
+			mcp.WithString("sendAsEmail", mcp.Required(), mcp.Description("The send-as email address")),
+			mcp.WithString("signature", mcp.Required(), mcp.Description("The signature HTML content")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			sendAsEmail := args["sendAsEmail"].(string)
+			signature := args["signature"].(string)
+			resp := r.services.Gmail.UpdateSignature(ctx, sendAsEmail, signature)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
 }

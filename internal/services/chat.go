@@ -301,3 +301,222 @@ func (s *ChatService) SetUpSpace(ctx context.Context, displayName string, member
 		"displayName": result.DisplayName,
 	})
 }
+
+// AddReaction adds a reaction (emoji) to a message
+func (s *ChatService) AddReaction(ctx context.Context, messageName string, emoji string) ToolResponse {
+	client, err := s.getChatClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Extract parent (space name and message name)
+	reaction := &chat.Reaction{
+		Emoji: &chat.Emoji{
+			Unicode: emoji,
+		},
+	}
+
+	result, err := client.Spaces.Messages.Reactions.Create(messageName, reaction).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"name":  result.Name,
+		"emoji": emoji,
+	})
+}
+
+// RemoveReaction removes a reaction from a message
+func (s *ChatService) RemoveReaction(ctx context.Context, reactionName string) ToolResponse {
+	client, err := s.getChatClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	_, err = client.Spaces.Messages.Reactions.Delete(reactionName).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status": "deleted",
+	})
+}
+
+// ListReactions lists reactions on a message
+func (s *ChatService) ListReactions(ctx context.Context, messageName string, pageToken *string, pageSize *int) ToolResponse {
+	client, err := s.getChatClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	req := client.Spaces.Messages.Reactions.List(messageName)
+
+	if pageSize != nil {
+		req.PageSize(int64(*pageSize))
+	} else {
+		req.PageSize(25)
+	}
+
+	if pageToken != nil && *pageToken != "" {
+		req.PageToken(*pageToken)
+	}
+
+	result, err := req.Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	reactions := make([]map[string]interface{}, len(result.Reactions))
+	for i, r := range result.Reactions {
+		reactions[i] = map[string]interface{}{
+			"name": r.Name,
+		}
+		if r.Emoji != nil {
+			reactions[i]["emoji"] = r.Emoji.Unicode
+		}
+		if r.User != nil {
+			reactions[i]["user"] = r.User.Name
+		}
+	}
+
+	response := map[string]interface{}{
+		"reactions": reactions,
+	}
+	if result.NextPageToken != "" {
+		response["nextPageToken"] = result.NextPageToken
+	}
+
+	return JSONResponse(response)
+}
+
+// SendCardMessage sends a card message to a space
+func (s *ChatService) SendCardMessage(ctx context.Context, spaceName string, cardJSON string, threadKey *string) ToolResponse {
+	client, err := s.getChatClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	message := &chat.Message{
+		CardsV2: []*chat.CardWithId{
+			{
+				CardId: "card1",
+				Card: &chat.GoogleAppsCardV1Card{
+					Header: &chat.GoogleAppsCardV1CardHeader{
+						Title: "Card Message",
+					},
+					Sections: []*chat.GoogleAppsCardV1Section{
+						{
+							Widgets: []*chat.GoogleAppsCardV1Widget{
+								{
+									TextParagraph: &chat.GoogleAppsCardV1TextParagraph{
+										Text: cardJSON,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if threadKey != nil && *threadKey != "" {
+		message.Thread = &chat.Thread{
+			ThreadKey: *threadKey,
+		}
+	}
+
+	result, err := client.Spaces.Messages.Create(spaceName, message).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]string{
+		"name":       result.Name,
+		"createTime": result.CreateTime,
+	})
+}
+
+// SendRichCard sends a rich card message with header, sections, and buttons
+func (s *ChatService) SendRichCard(ctx context.Context, spaceName string, title, subtitle, imageURL, text string, buttonText, buttonURL *string, threadKey *string) ToolResponse {
+	client, err := s.getChatClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	card := &chat.GoogleAppsCardV1Card{
+		Header: &chat.GoogleAppsCardV1CardHeader{
+			Title:    title,
+			Subtitle: subtitle,
+		},
+		Sections: []*chat.GoogleAppsCardV1Section{},
+	}
+
+	// Add image if provided
+	if imageURL != "" {
+		card.Header.ImageUrl = imageURL
+		card.Header.ImageType = "CIRCLE"
+	}
+
+	// Add text section
+	if text != "" {
+		card.Sections = append(card.Sections, &chat.GoogleAppsCardV1Section{
+			Widgets: []*chat.GoogleAppsCardV1Widget{
+				{
+					TextParagraph: &chat.GoogleAppsCardV1TextParagraph{
+						Text: text,
+					},
+				},
+			},
+		})
+	}
+
+	// Add button if provided
+	if buttonText != nil && *buttonText != "" && buttonURL != nil && *buttonURL != "" {
+		card.Sections = append(card.Sections, &chat.GoogleAppsCardV1Section{
+			Widgets: []*chat.GoogleAppsCardV1Widget{
+				{
+					ButtonList: &chat.GoogleAppsCardV1ButtonList{
+						Buttons: []*chat.GoogleAppsCardV1Button{
+							{
+								Text: *buttonText,
+								OnClick: &chat.GoogleAppsCardV1OnClick{
+									OpenLink: &chat.GoogleAppsCardV1OpenLink{
+										Url: *buttonURL,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}
+
+	message := &chat.Message{
+		CardsV2: []*chat.CardWithId{
+			{
+				CardId: "richCard",
+				Card:   card,
+			},
+		},
+	}
+
+	if threadKey != nil && *threadKey != "" {
+		message.Thread = &chat.Thread{
+			ThreadKey: *threadKey,
+		}
+	}
+
+	result, err := client.Spaces.Messages.Create(spaceName, message).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]string{
+		"name":       result.Name,
+		"createTime": result.CreateTime,
+	})
+}

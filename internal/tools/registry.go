@@ -20,6 +20,8 @@ type ServiceContainer struct {
 	Slides   *services.SlidesService
 	Sheets   *services.SheetsService
 	Time     *services.TimeService
+	Tasks    *services.TasksService
+	Forms    *services.FormsService
 }
 
 // ToolRegistrar registers all tools with the MCP server
@@ -50,4 +52,6 @@ func (r *ToolRegistrar) RegisterAll() {
 	r.registerPeopleTools()
 	r.registerSlidesTools()
 	r.registerSheetsTools()
+	r.registerTasksTools()
+	r.registerFormsTools()
 }

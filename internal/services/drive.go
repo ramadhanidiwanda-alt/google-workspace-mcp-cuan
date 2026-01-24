@@ -590,3 +590,345 @@ func (s *DriveService) EmptyTrash(ctx context.Context) ToolResponse {
 		"message": "Trash emptied",
 	})
 }
+
+// ExportFile exports a Google Workspace file (Docs, Sheets, Slides) to a different format
+// Supported MIME types:
+// - application/pdf (all)
+// - application/vnd.openxmlformats-officedocument.wordprocessingml.document (Docs -> DOCX)
+// - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet (Sheets -> XLSX)
+// - application/vnd.openxmlformats-officedocument.presentationml.presentation (Slides -> PPTX)
+// - text/plain (Docs)
+// - text/csv (Sheets)
+func (s *DriveService) ExportFile(ctx context.Context, fileID, mimeType, localPath string) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Get file metadata first
+	file, err := client.Files.Get(fileID).Fields("name, mimeType").Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Export the file
+	resp, err := client.Files.Export(fileID, mimeType).Download()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+	defer resp.Body.Close()
+
+	// Create directory if it doesn't exist
+	dir := filepath.Dir(localPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return ErrorResponse(fmt.Errorf("failed to create directory: %w", err))
+	}
+
+	// Create output file
+	out, err := os.Create(localPath)
+	if err != nil {
+		return ErrorResponse(fmt.Errorf("failed to create file: %w", err))
+	}
+	defer out.Close()
+
+	// Copy content
+	written, err := io.Copy(out, resp.Body)
+	if err != nil {
+		return ErrorResponse(fmt.Errorf("failed to write file: %w", err))
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":       "success",
+		"fileName":     file.Name,
+		"exportedTo":   localPath,
+		"exportFormat": mimeType,
+		"bytesWritten": written,
+	})
+}
+
+// ListComments lists comments on a file
+func (s *DriveService) ListComments(ctx context.Context, fileID string, pageToken *string, pageSize *int) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	req := client.Comments.List(fileID).Fields("comments(id,content,author,createdTime,modifiedTime,resolved,replies)")
+
+	if pageSize != nil {
+		req.PageSize(int64(*pageSize))
+	} else {
+		req.PageSize(20)
+	}
+
+	if pageToken != nil && *pageToken != "" {
+		req.PageToken(*pageToken)
+	}
+
+	result, err := req.Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	comments := make([]map[string]interface{}, len(result.Comments))
+	for i, c := range result.Comments {
+		comment := map[string]interface{}{
+			"id":           c.Id,
+			"content":      c.Content,
+			"createdTime":  c.CreatedTime,
+			"modifiedTime": c.ModifiedTime,
+			"resolved":     c.Resolved,
+		}
+		if c.Author != nil {
+			comment["author"] = map[string]string{
+				"displayName": c.Author.DisplayName,
+				"emailAddress": c.Author.EmailAddress,
+			}
+		}
+		if len(c.Replies) > 0 {
+			replies := make([]map[string]interface{}, len(c.Replies))
+			for j, r := range c.Replies {
+				reply := map[string]interface{}{
+					"id":          r.Id,
+					"content":     r.Content,
+					"createdTime": r.CreatedTime,
+				}
+				if r.Author != nil {
+					reply["author"] = map[string]string{
+						"displayName":  r.Author.DisplayName,
+						"emailAddress": r.Author.EmailAddress,
+					}
+				}
+				replies[j] = reply
+			}
+			comment["replies"] = replies
+		}
+		comments[i] = comment
+	}
+
+	response := map[string]interface{}{
+		"comments": comments,
+	}
+	if result.NextPageToken != "" {
+		response["nextPageToken"] = result.NextPageToken
+	}
+
+	return JSONResponse(response)
+}
+
+// CreateComment creates a comment on a file
+func (s *DriveService) CreateComment(ctx context.Context, fileID, content string) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	comment := &drive.Comment{
+		Content: content,
+	}
+
+	result, err := client.Comments.Create(fileID, comment).Fields("id,content,author,createdTime").Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	response := map[string]interface{}{
+		"id":          result.Id,
+		"content":     result.Content,
+		"createdTime": result.CreatedTime,
+	}
+	if result.Author != nil {
+		response["author"] = map[string]string{
+			"displayName":  result.Author.DisplayName,
+			"emailAddress": result.Author.EmailAddress,
+		}
+	}
+
+	return JSONResponse(response)
+}
+
+// ReplyToComment replies to a comment on a file
+func (s *DriveService) ReplyToComment(ctx context.Context, fileID, commentID, content string) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	reply := &drive.Reply{
+		Content: content,
+	}
+
+	result, err := client.Replies.Create(fileID, commentID, reply).Fields("id,content,author,createdTime").Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	response := map[string]interface{}{
+		"id":          result.Id,
+		"content":     result.Content,
+		"createdTime": result.CreatedTime,
+	}
+	if result.Author != nil {
+		response["author"] = map[string]string{
+			"displayName":  result.Author.DisplayName,
+			"emailAddress": result.Author.EmailAddress,
+		}
+	}
+
+	return JSONResponse(response)
+}
+
+// ResolveComment marks a comment as resolved
+func (s *DriveService) ResolveComment(ctx context.Context, fileID, commentID string, resolved bool) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// To resolve a comment, we need to create a reply that resolves it
+	reply := &drive.Reply{
+		Content: "",
+		Action:  "resolve",
+	}
+	if !resolved {
+		reply.Action = "reopen"
+	}
+
+	_, err = client.Replies.Create(fileID, commentID, reply).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":    "success",
+		"commentId": commentID,
+		"resolved":  resolved,
+	})
+}
+
+// ListRevisions lists file revisions (version history)
+func (s *DriveService) ListRevisions(ctx context.Context, fileID string, pageToken *string, pageSize *int) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	req := client.Revisions.List(fileID).Fields("revisions(id,modifiedTime,lastModifyingUser,size,keepForever)")
+
+	if pageSize != nil {
+		req.PageSize(int64(*pageSize))
+	} else {
+		req.PageSize(20)
+	}
+
+	if pageToken != nil && *pageToken != "" {
+		req.PageToken(*pageToken)
+	}
+
+	result, err := req.Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	revisions := make([]map[string]interface{}, len(result.Revisions))
+	for i, r := range result.Revisions {
+		revision := map[string]interface{}{
+			"id":           r.Id,
+			"modifiedTime": r.ModifiedTime,
+			"size":         r.Size,
+			"keepForever":  r.KeepForever,
+		}
+		if r.LastModifyingUser != nil {
+			revision["lastModifyingUser"] = map[string]string{
+				"displayName":  r.LastModifyingUser.DisplayName,
+				"emailAddress": r.LastModifyingUser.EmailAddress,
+			}
+		}
+		revisions[i] = revision
+	}
+
+	response := map[string]interface{}{
+		"revisions": revisions,
+	}
+	if result.NextPageToken != "" {
+		response["nextPageToken"] = result.NextPageToken
+	}
+
+	return JSONResponse(response)
+}
+
+// GetRevision gets a specific revision
+func (s *DriveService) GetRevision(ctx context.Context, fileID, revisionID string) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	result, err := client.Revisions.Get(fileID, revisionID).Fields("*").Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	response := map[string]interface{}{
+		"id":           result.Id,
+		"modifiedTime": result.ModifiedTime,
+		"size":         result.Size,
+		"keepForever":  result.KeepForever,
+		"mimeType":     result.MimeType,
+	}
+	if result.LastModifyingUser != nil {
+		response["lastModifyingUser"] = map[string]string{
+			"displayName":  result.LastModifyingUser.DisplayName,
+			"emailAddress": result.LastModifyingUser.EmailAddress,
+		}
+	}
+
+	return JSONResponse(response)
+}
+
+// GetExportFormats returns available export formats for a Google Workspace file
+func (s *DriveService) GetExportFormats(ctx context.Context, fileID string) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	file, err := client.Files.Get(fileID).Fields("name, mimeType, exportLinks").Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	formats := make(map[string]string)
+
+	// Define common export formats based on source type
+	switch file.MimeType {
+	case "application/vnd.google-apps.document":
+		formats["pdf"] = "application/pdf"
+		formats["docx"] = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+		formats["txt"] = "text/plain"
+		formats["html"] = "text/html"
+		formats["rtf"] = "application/rtf"
+		formats["odt"] = "application/vnd.oasis.opendocument.text"
+	case "application/vnd.google-apps.spreadsheet":
+		formats["pdf"] = "application/pdf"
+		formats["xlsx"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+		formats["csv"] = "text/csv"
+		formats["ods"] = "application/vnd.oasis.opendocument.spreadsheet"
+	case "application/vnd.google-apps.presentation":
+		formats["pdf"] = "application/pdf"
+		formats["pptx"] = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+		formats["odp"] = "application/vnd.oasis.opendocument.presentation"
+	case "application/vnd.google-apps.drawing":
+		formats["pdf"] = "application/pdf"
+		formats["png"] = "image/png"
+		formats["jpg"] = "image/jpeg"
+		formats["svg"] = "image/svg+xml"
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"fileId":   fileID,
+		"fileName": file.Name,
+		"mimeType": file.MimeType,
+		"formats":  formats,
+	})
+}

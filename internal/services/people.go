@@ -232,6 +232,212 @@ func formatPerson(person *people.Person) ToolResponse {
 	return JSONResponse(result)
 }
 
+// ListContacts lists the user's contacts
+func (s *PeopleService) ListContacts(ctx context.Context, pageSize int64, pageToken string) ToolResponse {
+	client, err := s.getPeopleClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	req := client.People.Connections.List("people/me").
+		PersonFields(personFields)
+
+	if pageSize > 0 {
+		req.PageSize(pageSize)
+	} else {
+		req.PageSize(100)
+	}
+
+	if pageToken != "" {
+		req.PageToken(pageToken)
+	}
+
+	result, err := req.Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	contacts := make([]map[string]interface{}, 0, len(result.Connections))
+	for _, person := range result.Connections {
+		contact := map[string]interface{}{
+			"resourceName": person.ResourceName,
+		}
+		if len(person.Names) > 0 {
+			contact["displayName"] = person.Names[0].DisplayName
+		}
+		if len(person.EmailAddresses) > 0 {
+			contact["email"] = person.EmailAddresses[0].Value
+		}
+		if len(person.PhoneNumbers) > 0 {
+			contact["phone"] = person.PhoneNumbers[0].Value
+		}
+		contacts = append(contacts, contact)
+	}
+
+	response := map[string]interface{}{
+		"contacts":   contacts,
+		"totalItems": result.TotalItems,
+	}
+	if result.NextPageToken != "" {
+		response["nextPageToken"] = result.NextPageToken
+	}
+
+	return JSONResponse(response)
+}
+
+// CreateContact creates a new contact
+func (s *PeopleService) CreateContact(ctx context.Context, givenName, familyName, email, phone string) ToolResponse {
+	client, err := s.getPeopleClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	person := &people.Person{}
+
+	// Set name
+	if givenName != "" || familyName != "" {
+		person.Names = []*people.Name{{
+			GivenName:  givenName,
+			FamilyName: familyName,
+		}}
+	}
+
+	// Set email
+	if email != "" {
+		person.EmailAddresses = []*people.EmailAddress{{
+			Value: email,
+		}}
+	}
+
+	// Set phone
+	if phone != "" {
+		person.PhoneNumbers = []*people.PhoneNumber{{
+			Value: phone,
+		}}
+	}
+
+	result, err := client.People.CreateContact(person).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return formatPerson(result)
+}
+
+// UpdateContact updates an existing contact
+func (s *PeopleService) UpdateContact(ctx context.Context, resourceName, givenName, familyName, email, phone string) ToolResponse {
+	client, err := s.getPeopleClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Get current contact
+	existing, err := client.People.Get(resourceName).PersonFields(personFields).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Update fields
+	if givenName != "" || familyName != "" {
+		if len(existing.Names) == 0 {
+			existing.Names = []*people.Name{{}}
+		}
+		if givenName != "" {
+			existing.Names[0].GivenName = givenName
+		}
+		if familyName != "" {
+			existing.Names[0].FamilyName = familyName
+		}
+	}
+
+	if email != "" {
+		if len(existing.EmailAddresses) == 0 {
+			existing.EmailAddresses = []*people.EmailAddress{{}}
+		}
+		existing.EmailAddresses[0].Value = email
+	}
+
+	if phone != "" {
+		if len(existing.PhoneNumbers) == 0 {
+			existing.PhoneNumbers = []*people.PhoneNumber{{}}
+		}
+		existing.PhoneNumbers[0].Value = phone
+	}
+
+	updateMask := "names,emailAddresses,phoneNumbers"
+	result, err := client.People.UpdateContact(resourceName, existing).
+		UpdatePersonFields(updateMask).
+		Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return formatPerson(result)
+}
+
+// DeleteContact deletes a contact
+func (s *PeopleService) DeleteContact(ctx context.Context, resourceName string) ToolResponse {
+	client, err := s.getPeopleClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	_, err = client.People.DeleteContact(resourceName).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":  "success",
+		"message": "Contact deleted",
+	})
+}
+
+// SearchContacts searches the user's contacts
+func (s *PeopleService) SearchContacts(ctx context.Context, query string, pageSize int64) ToolResponse {
+	client, err := s.getPeopleClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	req := client.People.SearchContacts().
+		Query(query).
+		ReadMask(personFields)
+
+	if pageSize > 0 {
+		req.PageSize(pageSize)
+	} else {
+		req.PageSize(30)
+	}
+
+	result, err := req.Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	contacts := make([]map[string]interface{}, 0, len(result.Results))
+	for _, res := range result.Results {
+		person := res.Person
+		contact := map[string]interface{}{
+			"resourceName": person.ResourceName,
+		}
+		if len(person.Names) > 0 {
+			contact["displayName"] = person.Names[0].DisplayName
+		}
+		if len(person.EmailAddresses) > 0 {
+			contact["email"] = person.EmailAddresses[0].Value
+		}
+		if len(person.PhoneNumbers) > 0 {
+			contact["phone"] = person.PhoneNumbers[0].Value
+		}
+		contacts = append(contacts, contact)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"contacts": contacts,
+	})
+}
+
 // SearchDirectory searches the directory for people
 func (s *PeopleService) SearchDirectory(ctx context.Context, query string, pageToken *string, pageSize *int) ToolResponse {
 	client, err := s.getPeopleClient(ctx)

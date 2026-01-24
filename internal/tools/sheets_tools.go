@@ -206,4 +206,58 @@ func (r *ToolRegistrar) registerSheetsTools() {
 			return mcp.NewToolResultText(resp.Content[0].Text), nil
 		},
 	)
+
+	// sheets.addChart
+	r.server.AddTool(
+		mcp.NewTool("sheets.addChart",
+			mcp.WithDescription("Adds a chart to a sheet. Supports BAR, LINE, PIE, and COLUMN chart types."),
+			mcp.WithString("spreadsheetId", mcp.Required(), mcp.Description("The ID of the spreadsheet")),
+			mcp.WithNumber("sheetId", mcp.Required(), mcp.Description("The ID of the sheet")),
+			mcp.WithString("chartType", mcp.Required(), mcp.Description("Chart type: BAR, LINE, PIE, or COLUMN")),
+			mcp.WithString("dataRange", mcp.Required(), mcp.Description("Data range in A1 notation (e.g., A1:B10)")),
+			mcp.WithString("title", mcp.Description("Chart title")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			spreadsheetID := args["spreadsheetId"].(string)
+			sheetID := int64(args["sheetId"].(float64))
+			chartType := args["chartType"].(string)
+			dataRange := args["dataRange"].(string)
+			var title *string
+			if v, ok := args["title"].(string); ok && v != "" {
+				title = &v
+			}
+			resp := r.services.Sheets.AddChart(ctx, spreadsheetID, sheetID, chartType, dataRange, title)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// sheets.addConditionalFormatting
+	r.server.AddTool(
+		mcp.NewTool("sheets.addConditionalFormatting",
+			mcp.WithDescription("Adds conditional formatting to a sheet. Rule types: NOT_BLANK, BLANK, TEXT_CONTAINS, NUMBER_GREATER, NUMBER_LESS."),
+			mcp.WithString("spreadsheetId", mcp.Required(), mcp.Description("The ID of the spreadsheet")),
+			mcp.WithNumber("sheetId", mcp.Required(), mcp.Description("The ID of the sheet")),
+			mcp.WithString("range", mcp.Required(), mcp.Description("Range in A1 notation")),
+			mcp.WithString("ruleType", mcp.Required(), mcp.Description("Rule type: NOT_BLANK, BLANK, TEXT_CONTAINS, NUMBER_GREATER, NUMBER_LESS")),
+			mcp.WithString("value", mcp.Description("Value for comparison (required for TEXT_CONTAINS, NUMBER_GREATER, NUMBER_LESS)")),
+			mcp.WithString("bgColor", mcp.Description("Background color in hex format (e.g., #FF0000)")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			spreadsheetID := args["spreadsheetId"].(string)
+			sheetID := int64(args["sheetId"].(float64))
+			rangeA1 := args["range"].(string)
+			ruleType := args["ruleType"].(string)
+			var value, bgColor *string
+			if v, ok := args["value"].(string); ok && v != "" {
+				value = &v
+			}
+			if v, ok := args["bgColor"].(string); ok && v != "" {
+				bgColor = &v
+			}
+			resp := r.services.Sheets.AddConditionalFormatting(ctx, spreadsheetID, sheetID, rangeA1, ruleType, value, bgColor)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
 }

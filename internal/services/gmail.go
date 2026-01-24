@@ -700,3 +700,193 @@ func (s *GmailService) UntrashMessage(ctx context.Context, messageID string) Too
 		"messageId": messageID,
 	})
 }
+
+// ListFilters lists all Gmail filters
+func (s *GmailService) ListFilters(ctx context.Context) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	result, err := client.Users.Settings.Filters.List("me").Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	filters := make([]map[string]interface{}, len(result.Filter))
+	for i, f := range result.Filter {
+		filter := map[string]interface{}{
+			"id": f.Id,
+		}
+		if f.Criteria != nil {
+			filter["criteria"] = map[string]interface{}{
+				"from":           f.Criteria.From,
+				"to":             f.Criteria.To,
+				"subject":        f.Criteria.Subject,
+				"query":          f.Criteria.Query,
+				"hasAttachment":  f.Criteria.HasAttachment,
+				"excludeChats":   f.Criteria.ExcludeChats,
+				"size":           f.Criteria.Size,
+				"sizeComparison": f.Criteria.SizeComparison,
+			}
+		}
+		if f.Action != nil {
+			filter["action"] = map[string]interface{}{
+				"addLabelIds":    f.Action.AddLabelIds,
+				"removeLabelIds": f.Action.RemoveLabelIds,
+				"forward":        f.Action.Forward,
+			}
+		}
+		filters[i] = filter
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"filters": filters,
+	})
+}
+
+// CreateFilter creates a new Gmail filter
+func (s *GmailService) CreateFilter(ctx context.Context, from, to, subject, query *string, hasAttachment *bool, addLabelIDs, removeLabelIDs []string, forward *string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	filter := &gmail.Filter{
+		Criteria: &gmail.FilterCriteria{},
+		Action:   &gmail.FilterAction{},
+	}
+
+	// Set criteria
+	if from != nil && *from != "" {
+		filter.Criteria.From = *from
+	}
+	if to != nil && *to != "" {
+		filter.Criteria.To = *to
+	}
+	if subject != nil && *subject != "" {
+		filter.Criteria.Subject = *subject
+	}
+	if query != nil && *query != "" {
+		filter.Criteria.Query = *query
+	}
+	if hasAttachment != nil {
+		filter.Criteria.HasAttachment = *hasAttachment
+	}
+
+	// Set actions
+	if len(addLabelIDs) > 0 {
+		filter.Action.AddLabelIds = addLabelIDs
+	}
+	if len(removeLabelIDs) > 0 {
+		filter.Action.RemoveLabelIds = removeLabelIDs
+	}
+	if forward != nil && *forward != "" {
+		filter.Action.Forward = *forward
+	}
+
+	result, err := client.Users.Settings.Filters.Create("me", filter).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"id":     result.Id,
+		"status": "created",
+	})
+}
+
+// DeleteFilter deletes a Gmail filter
+func (s *GmailService) DeleteFilter(ctx context.Context, filterID string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	err = client.Users.Settings.Filters.Delete("me", filterID).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":   "deleted",
+		"filterId": filterID,
+	})
+}
+
+// GetSendAs gets the send-as settings (signature, etc.)
+func (s *GmailService) GetSendAs(ctx context.Context, sendAsEmail *string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	if sendAsEmail == nil || *sendAsEmail == "" {
+		// List all send-as addresses
+		result, err := client.Users.Settings.SendAs.List("me").Do()
+		if err != nil {
+			return ErrorResponse(err)
+		}
+
+		sendAsList := make([]map[string]interface{}, len(result.SendAs))
+		for i, sa := range result.SendAs {
+			sendAsList[i] = map[string]interface{}{
+				"sendAsEmail":     sa.SendAsEmail,
+				"displayName":     sa.DisplayName,
+				"isDefault":       sa.IsDefault,
+				"isPrimary":       sa.IsPrimary,
+				"signature":       sa.Signature,
+				"replyToAddress":  sa.ReplyToAddress,
+				"treatAsAlias":    sa.TreatAsAlias,
+			}
+		}
+
+		return JSONResponse(map[string]interface{}{
+			"sendAs": sendAsList,
+		})
+	}
+
+	// Get specific send-as
+	result, err := client.Users.Settings.SendAs.Get("me", *sendAsEmail).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"sendAsEmail":    result.SendAsEmail,
+		"displayName":    result.DisplayName,
+		"isDefault":      result.IsDefault,
+		"isPrimary":      result.IsPrimary,
+		"signature":      result.Signature,
+		"replyToAddress": result.ReplyToAddress,
+		"treatAsAlias":   result.TreatAsAlias,
+	})
+}
+
+// UpdateSignature updates the email signature
+func (s *GmailService) UpdateSignature(ctx context.Context, sendAsEmail, signature string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Get current settings first
+	current, err := client.Users.Settings.SendAs.Get("me", sendAsEmail).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Update only the signature
+	current.Signature = signature
+
+	result, err := client.Users.Settings.SendAs.Patch("me", sendAsEmail, current).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":      "updated",
+		"sendAsEmail": result.SendAsEmail,
+		"signature":   result.Signature,
+	})
+}

@@ -56,6 +56,37 @@ func (r *ToolRegistrar) registerCalendarTools() {
 		},
 	)
 
+	// calendar.createMeeting - Create event with Google Meet
+	r.server.AddTool(
+		mcp.NewTool("calendar.createMeeting",
+			mcp.WithDescription("Creates a calendar event with a Google Meet video conference link."),
+			mcp.WithString("summary", mcp.Required(), mcp.Description("Meeting title")),
+			mcp.WithString("start", mcp.Required(), mcp.Description("Start time in ISO8601 format")),
+			mcp.WithString("end", mcp.Required(), mcp.Description("End time in ISO8601 format")),
+			mcp.WithString("calendarId", mcp.Description("Calendar ID (defaults to primary)")),
+			mcp.WithString("description", mcp.Description("Meeting description")),
+			mcp.WithString("attendees", mcp.Description("Comma-separated list of attendee emails")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			summary := args["summary"].(string)
+			start := args["start"].(string)
+			end := args["end"].(string)
+			var calendarID, description, attendees *string
+			if v, ok := args["calendarId"].(string); ok && v != "" {
+				calendarID = &v
+			}
+			if v, ok := args["description"].(string); ok && v != "" {
+				description = &v
+			}
+			if v, ok := args["attendees"].(string); ok && v != "" {
+				attendees = &v
+			}
+			resp := r.services.Calendar.CreateMeetingWithMeet(ctx, summary, start, end, calendarID, description, attendees)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
 	// calendar.listEvents
 	r.server.AddTool(
 		mcp.NewTool("calendar.listEvents",
@@ -206,6 +237,43 @@ func (r *ToolRegistrar) registerCalendarTools() {
 			timeMax := args["timeMax"].(string)
 			durationMinutes := int(args["durationMinutes"].(float64))
 			resp := r.services.Calendar.FindFreeTimeSimple(ctx, attendees, timeMin, timeMax, durationMinutes)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// calendar.createRecurringEvent
+	r.server.AddTool(
+		mcp.NewTool("calendar.createRecurringEvent",
+			mcp.WithDescription("Creates a recurring calendar event. Supports simple patterns (DAILY, WEEKLY, MONTHLY, YEARLY, WEEKDAYS) or full RRULE format."),
+			mcp.WithString("summary", mcp.Required(), mcp.Description("Event title")),
+			mcp.WithString("start", mcp.Required(), mcp.Description("Start time in ISO8601 format")),
+			mcp.WithString("end", mcp.Required(), mcp.Description("End time in ISO8601 format")),
+			mcp.WithString("recurrence", mcp.Required(), mcp.Description("Recurrence pattern: DAILY, WEEKLY, MONTHLY, YEARLY, WEEKDAYS, or full RRULE")),
+			mcp.WithString("calendarId", mcp.Description("Calendar ID (defaults to primary)")),
+			mcp.WithString("description", mcp.Description("Event description")),
+			mcp.WithString("location", mcp.Description("Event location")),
+			mcp.WithString("attendees", mcp.Description("Comma-separated list of attendee emails")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			summary := args["summary"].(string)
+			start := args["start"].(string)
+			end := args["end"].(string)
+			recurrence := args["recurrence"].(string)
+			var calendarID, description, location, attendees *string
+			if v, ok := args["calendarId"].(string); ok && v != "" {
+				calendarID = &v
+			}
+			if v, ok := args["description"].(string); ok && v != "" {
+				description = &v
+			}
+			if v, ok := args["location"].(string); ok && v != "" {
+				location = &v
+			}
+			if v, ok := args["attendees"].(string); ok && v != "" {
+				attendees = &v
+			}
+			resp := r.services.Calendar.CreateRecurringEvent(ctx, summary, start, end, recurrence, calendarID, description, location, attendees)
 			return mcp.NewToolResultText(resp.Content[0].Text), nil
 		},
 	)

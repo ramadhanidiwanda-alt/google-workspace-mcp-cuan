@@ -33,6 +33,8 @@ var basicScopes = []string{
 	"https://www.googleapis.com/auth/directory.readonly",
 	"https://www.googleapis.com/auth/presentations.readonly",
 	"https://www.googleapis.com/auth/spreadsheets.readonly",
+	"https://www.googleapis.com/auth/tasks.readonly",
+	"https://www.googleapis.com/auth/forms.responses.readonly",
 }
 
 // Full scopes - read/write, requires custom OAuth
@@ -49,6 +51,10 @@ var fullScopes = []string{
 	"https://www.googleapis.com/auth/directory.readonly",
 	"https://www.googleapis.com/auth/presentations",
 	"https://www.googleapis.com/auth/spreadsheets",
+	"https://www.googleapis.com/auth/tasks",
+	"https://www.googleapis.com/auth/forms.body",
+	"https://www.googleapis.com/auth/forms.responses.readonly",
+	"https://www.googleapis.com/auth/contacts",
 }
 
 func main() {
@@ -80,6 +86,8 @@ func main() {
 		Slides:   services.NewSlidesService(authManager),
 		Sheets:   services.NewSheetsService(authManager),
 		Time:     services.NewTimeService(),
+		Tasks:    services.NewTasksService(authManager),
+		Forms:    services.NewFormsService(authManager),
 	}
 
 	// Create MCP server
