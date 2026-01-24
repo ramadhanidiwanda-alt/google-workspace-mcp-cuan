@@ -2,9 +2,9 @@ import { defineConfig } from 'vitepress'
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
-  base: '/workspace/',
-  title: "Gemini Workspace Extension",
-  description: "Documentation for the Google Workspace Server Extension",
+  base: '/google-workspace-mcp/',
+  title: "Google Workspace MCP",
+  description: "MCP Server for Google Workspace APIs",
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     nav: [
@@ -27,7 +27,7 @@ export default defineConfig({
     ],
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/gemini-cli-extensions/workspace' }
+      { icon: 'github', link: 'https://github.com/tomohiro-owada/google-workspace-mcp' }
     ]
   }
 })
