@@ -10,8 +10,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -19,18 +21,22 @@ import (
 	"github.com/oowada/google-workspace-mcp/internal/storage"
 	"github.com/oowada/google-workspace-mcp/internal/util"
 	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 )
 
 const (
-	// ClientID is the OAuth 2.0 client ID for the extension
-	ClientID = "338689075775-o75k922vn5fdl18qergr96rp8g63e4d7.apps.googleusercontent.com"
+	// DefaultClientID is the OAuth 2.0 client ID for the extension (fallback)
+	DefaultClientID = "338689075775-o75k922vn5fdl18qergr96rp8g63e4d7.apps.googleusercontent.com"
 
 	// CloudFunctionURL is the URL of the cloud function that handles OAuth
 	CloudFunctionURL = "https://google-workspace-extension.geminicli.com"
 
 	// GoogleAuthURL is the Google OAuth 2.0 authorization endpoint
 	GoogleAuthURL = "https://accounts.google.com/o/oauth2/v2/auth"
+
+	// GoogleTokenURL is the Google OAuth 2.0 token endpoint
+	GoogleTokenURL = "https://oauth2.googleapis.com/token"
 
 	// TokenExpiryBuffer is the time before expiry to trigger a refresh (5 minutes)
 	TokenExpiryBuffer = 5 * time.Minute
@@ -41,19 +47,50 @@ const (
 
 // AuthManager handles OAuth2 authentication with Google
 type AuthManager struct {
-	scopes  []string
-	token   *oauth2.Token
-	scope   string
-	tokenMu sync.RWMutex
-	storage *storage.OAuthCredentialStorage
+	scopes       []string
+	token        *oauth2.Token
+	scope        string
+	tokenMu      sync.RWMutex
+	storage      *storage.OAuthCredentialStorage
+	clientID     string
+	clientSecret string
+	useLocalAuth bool
+	fullAccess   bool
 }
 
 // NewAuthManager creates a new AuthManager instance
-func NewAuthManager(scopes []string) *AuthManager {
-	return &AuthManager{
-		scopes:  scopes,
-		storage: storage.NewOAuthCredentialStorage(),
+func NewAuthManager(basicScopes, fullScopes []string) *AuthManager {
+	clientID := os.Getenv("GOOGLE_CLIENT_ID")
+	clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
+	useLocalAuth := clientID != "" && clientSecret != ""
+
+	var scopes []string
+	var fullAccess bool
+
+	if useLocalAuth {
+		scopes = fullScopes
+		fullAccess = true
+		util.LogInfo("Full access mode (custom OAuth credentials)")
+	} else {
+		scopes = basicScopes
+		fullAccess = false
+		clientID = DefaultClientID
+		util.LogInfo("Basic mode (read-only). Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET for full access.")
 	}
+
+	return &AuthManager{
+		scopes:       scopes,
+		storage:      storage.NewOAuthCredentialStorage(),
+		clientID:     clientID,
+		clientSecret: clientSecret,
+		useLocalAuth: useLocalAuth,
+		fullAccess:   fullAccess,
+	}
+}
+
+// IsFullAccess returns whether full access mode is enabled
+func (m *AuthManager) IsFullAccess() bool {
+	return m.fullAccess
 }
 
 // ErrNotAuthenticated is returned when no valid credentials are available
@@ -120,7 +157,7 @@ func (m *AuthManager) GetClientOption(ctx context.Context) (option.ClientOption,
 	return option.WithTokenSource(oauth2.StaticTokenSource(token)), nil
 }
 
-// RefreshToken manually triggers a token refresh via the cloud function
+// RefreshToken manually triggers a token refresh
 func (m *AuthManager) RefreshToken(ctx context.Context) error {
 	m.tokenMu.Lock()
 	defer m.tokenMu.Unlock()
@@ -130,6 +167,32 @@ func (m *AuthManager) RefreshToken(ctx context.Context) error {
 	}
 
 	refreshToken := m.token.RefreshToken
+
+	if m.useLocalAuth {
+		// Use direct Google token refresh
+		config := &oauth2.Config{
+			ClientID:     m.clientID,
+			ClientSecret: m.clientSecret,
+			Endpoint:     google.Endpoint,
+		}
+		tokenSource := config.TokenSource(ctx, m.token)
+		newToken, err := tokenSource.Token()
+		if err != nil {
+			return fmt.Errorf("token refresh failed: %w", err)
+		}
+
+		m.token = newToken
+		if m.token.RefreshToken == "" {
+			m.token.RefreshToken = refreshToken
+		}
+
+		if err := m.storage.SaveToken(ctx, m.token, m.scope); err != nil {
+			util.LogWarn("Failed to save refreshed token: %v", err)
+		}
+
+		util.LogDebug("Token refreshed successfully (local)")
+		return nil
+	}
 
 	// Call cloud function to refresh token
 	reqBody, _ := json.Marshal(map[string]string{
@@ -163,21 +226,19 @@ func (m *AuthManager) RefreshToken(ctx context.Context) error {
 		return fmt.Errorf("failed to decode refresh response: %w", err)
 	}
 
-	// Update token (preserve refresh token as Google doesn't return a new one)
 	m.token = &oauth2.Token{
 		AccessToken:  result.AccessToken,
-		RefreshToken: refreshToken, // Preserve original refresh token
+		RefreshToken: refreshToken,
 		TokenType:    result.TokenType,
 		Expiry:       time.UnixMilli(result.ExpiryDate),
 	}
 	m.scope = result.Scope
 
-	// Save to storage
 	if err := m.storage.SaveToken(ctx, m.token, m.scope); err != nil {
 		util.LogWarn("Failed to save refreshed token: %v", err)
 	}
 
-	util.LogDebug("Token refreshed successfully")
+	util.LogDebug("Token refreshed successfully (cloud)")
 	return nil
 }
 
@@ -243,26 +304,131 @@ func (m *AuthManager) hasRequiredScopes(tokenScopes string) bool {
 
 // performWebAuth performs browser-based OAuth authentication
 func (m *AuthManager) performWebAuth(ctx context.Context) (*oauth2.Token, error) {
-	util.LogInfo("Starting browser-based authentication...")
+	if m.useLocalAuth {
+		return m.performLocalAuth(ctx)
+	}
+	return m.performCloudAuth(ctx)
+}
 
-	// Create context with timeout
+// performLocalAuth performs OAuth using local credentials
+func (m *AuthManager) performLocalAuth(ctx context.Context) (*oauth2.Token, error) {
+	util.LogInfo("Starting local OAuth authentication...")
+
 	ctx, cancel := context.WithTimeout(ctx, AuthTimeout)
 	defer cancel()
 
-	// Generate CSRF token
+	// Start local callback server
+	codeCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+
+	// Find available port
+	listener, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		return nil, fmt.Errorf("failed to start callback server: %w", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
+
+	// OAuth2 config
+	config := &oauth2.Config{
+		ClientID:     m.clientID,
+		ClientSecret: m.clientSecret,
+		Endpoint:     google.Endpoint,
+		RedirectURL:  redirectURI,
+		Scopes:       m.scopes,
+	}
+
+	// Generate state
+	state, _ := generateCSRFToken()
+
+	// Start HTTP server for callback
+	mux := http.NewServeMux()
+	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("state") != state {
+			errCh <- fmt.Errorf("state mismatch")
+			http.Error(w, "State mismatch", http.StatusBadRequest)
+			return
+		}
+		if errMsg := r.URL.Query().Get("error"); errMsg != "" {
+			errCh <- fmt.Errorf("auth error: %s", errMsg)
+			http.Error(w, errMsg, http.StatusBadRequest)
+			return
+		}
+		code := r.URL.Query().Get("code")
+		if code == "" {
+			errCh <- fmt.Errorf("no code received")
+			http.Error(w, "No code", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>"))
+		codeCh <- code
+	})
+
+	server := &http.Server{Handler: mux}
+	go func() {
+		if err := server.Serve(listener); err != http.ErrServerClosed {
+			errCh <- err
+		}
+	}()
+	defer server.Close()
+
+	// Build auth URL and open browser
+	authURL := config.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce)
+	util.LogInfo("Opening browser for authentication...")
+	if err := OpenBrowser(authURL); err != nil {
+		util.LogWarn("Failed to open browser: %v", err)
+		util.LogInfo("Please open the following URL manually:")
+		fmt.Println(authURL)
+	}
+
+	// Wait for callback
+	select {
+	case code := <-codeCh:
+		// Exchange code for token
+		token, err := config.Exchange(ctx, code)
+		if err != nil {
+			return nil, fmt.Errorf("failed to exchange code: %w", err)
+		}
+
+		m.tokenMu.Lock()
+		m.token = token
+		m.scope = strings.Join(m.scopes, " ")
+		m.tokenMu.Unlock()
+
+		if err := m.storage.SaveToken(ctx, token, m.scope); err != nil {
+			util.LogWarn("Failed to save token: %v", err)
+		}
+
+		util.LogInfo("Authentication successful!")
+		return token, nil
+
+	case err := <-errCh:
+		return nil, err
+
+	case <-ctx.Done():
+		return nil, fmt.Errorf("authentication timed out")
+	}
+}
+
+// performCloudAuth performs OAuth using cloud function (default mode)
+func (m *AuthManager) performCloudAuth(ctx context.Context) (*oauth2.Token, error) {
+	util.LogInfo("Starting cloud OAuth authentication...")
+
+	ctx, cancel := context.WithTimeout(ctx, AuthTimeout)
+	defer cancel()
+
 	csrfToken, err := generateCSRFToken()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate CSRF token: %w", err)
 	}
 
-	// Start callback server
 	callbackURL, resultCh, cleanup, err := StartCallbackServer(ctx, csrfToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start callback server: %w", err)
 	}
 	defer cleanup()
 
-	// Build state parameter
 	stateData := map[string]interface{}{
 		"csrf": csrfToken,
 	}
@@ -277,10 +443,8 @@ func (m *AuthManager) performWebAuth(ctx context.Context) (*oauth2.Token, error)
 	stateJSON, _ := json.Marshal(stateData)
 	state := base64.StdEncoding.EncodeToString(stateJSON)
 
-	// Build auth URL
 	authURL := buildAuthURL(m.scopes, state)
 
-	// Launch browser or show manual instructions
 	if ShouldLaunchBrowser() {
 		util.LogInfo("Opening browser for authentication...")
 		if err := OpenBrowser(authURL); err != nil {
@@ -293,7 +457,6 @@ func (m *AuthManager) performWebAuth(ctx context.Context) (*oauth2.Token, error)
 		fmt.Println(authURL)
 	}
 
-	// Wait for callback
 	select {
 	case result := <-resultCh:
 		if result.Error != nil {
@@ -305,7 +468,6 @@ func (m *AuthManager) performWebAuth(ctx context.Context) (*oauth2.Token, error)
 		m.scope = strings.Join(m.scopes, " ")
 		m.tokenMu.Unlock()
 
-		// Save to storage
 		if err := m.storage.SaveToken(ctx, result.Token, m.scope); err != nil {
 			util.LogWarn("Failed to save token: %v", err)
 		}
@@ -318,10 +480,10 @@ func (m *AuthManager) performWebAuth(ctx context.Context) (*oauth2.Token, error)
 	}
 }
 
-// buildAuthURL builds the Google OAuth authorization URL
+// buildAuthURL builds the Google OAuth authorization URL for cloud auth
 func buildAuthURL(scopes []string, state string) string {
 	params := url.Values{
-		"client_id":     {ClientID},
+		"client_id":     {DefaultClientID},
 		"redirect_uri":  {CloudFunctionURL},
 		"response_type": {"code"},
 		"scope":         {strings.Join(scopes, " ")},

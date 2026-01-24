@@ -93,6 +93,97 @@ auth.login
 auth.clear
 ```
 
+### Access Modes
+
+This server supports two access modes:
+
+| Mode | Permissions | Setup Required |
+|------|-------------|----------------|
+| **Basic** | Read-only | None (default) |
+| **Full Access** | Read + Write + Delete | Custom OAuth credentials |
+
+#### Basic Mode (Default)
+
+Works out of the box with read-only permissions. No additional setup required.
+
+#### Full Access Mode
+
+To enable write operations (send emails, create documents, etc.), you need to set up your own OAuth credentials.
+
+<details>
+<summary><b>Setup Instructions</b></summary>
+
+##### 1. Create a Google Cloud Project
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project (e.g., `workspace-mcp`)
+3. Enable the following APIs:
+   - Google Calendar API
+   - Gmail API
+   - Google Drive API
+   - Google Docs API
+   - Google Sheets API
+   - Google Slides API
+   - Google Chat API
+   - People API
+
+##### 2. Configure OAuth Consent Screen
+
+1. Go to **APIs & Services** > **OAuth consent screen**
+2. Choose User Type:
+   - **Internal**: For Google Workspace organizations (all members can use)
+   - **External**: For personal Gmail accounts (requires adding test users or Google verification)
+3. Fill in the required fields (App name, User support email, Developer contact)
+4. Add scopes (or skip - they'll be requested at runtime)
+5. If External: Add test users (your Gmail address)
+
+##### 3. Create OAuth Credentials
+
+1. Go to **APIs & Services** > **Credentials**
+2. Click **Create Credentials** > **OAuth client ID**
+3. Select **Desktop app**
+4. Download or copy the **Client ID** and **Client Secret**
+
+##### 4. Configure the MCP Server
+
+Add environment variables to your MCP configuration:
+
+**Claude Code** (`~/.claude.json`):
+```json
+{
+  "mcpServers": {
+    "google-workspace": {
+      "command": "/usr/local/bin/workspace-server",
+      "env": {
+        "GOOGLE_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
+        "GOOGLE_CLIENT_SECRET": "your-client-secret"
+      }
+    }
+  }
+}
+```
+
+**Claude Desktop** (`claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "google-workspace": {
+      "command": "/usr/local/bin/workspace-server",
+      "env": {
+        "GOOGLE_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
+        "GOOGLE_CLIENT_SECRET": "your-client-secret"
+      }
+    }
+  }
+}
+```
+
+##### 5. Re-authenticate
+
+After configuration, restart the MCP server and run `auth.login` again.
+
+</details>
+
 ### Available Tools
 
 <details>
@@ -361,6 +452,97 @@ auth.login
 # 認証情報をクリア
 auth.clear
 ```
+
+### アクセスモード
+
+このサーバーは2つのアクセスモードをサポートしています:
+
+| モード | 権限 | セットアップ |
+|--------|------|-------------|
+| **Basic** | 読み取り専用 | 不要（デフォルト） |
+| **Full Access** | 読み取り + 書き込み + 削除 | カスタムOAuth認証情報が必要 |
+
+#### Basic モード（デフォルト）
+
+追加設定なしで読み取り専用の権限で動作します。
+
+#### Full Access モード
+
+書き込み操作（メール送信、ドキュメント作成など）を有効にするには、独自のOAuth認証情報を設定する必要があります。
+
+<details>
+<summary><b>セットアップ手順</b></summary>
+
+##### 1. Google Cloud プロジェクトを作成
+
+1. [Google Cloud Console](https://console.cloud.google.com/) にアクセス
+2. 新しいプロジェクトを作成（例: `workspace-mcp`）
+3. 以下のAPIを有効化:
+   - Google Calendar API
+   - Gmail API
+   - Google Drive API
+   - Google Docs API
+   - Google Sheets API
+   - Google Slides API
+   - Google Chat API
+   - People API
+
+##### 2. OAuth 同意画面を設定
+
+1. **APIとサービス** > **OAuth 同意画面** に移動
+2. ユーザータイプを選択:
+   - **内部**: Google Workspace 組織向け（組織内の全メンバーが利用可能）
+   - **外部**: 個人の Gmail アカウント向け（テストユーザーの追加またはGoogle審査が必要）
+3. 必須項目を入力（アプリ名、ユーザーサポートメール、デベロッパー連絡先）
+4. スコープを追加（またはスキップ - 実行時に要求されます）
+5. 外部の場合: テストユーザーを追加（あなたのGmailアドレス）
+
+##### 3. OAuth 認証情報を作成
+
+1. **APIとサービス** > **認証情報** に移動
+2. **認証情報を作成** > **OAuth クライアント ID** をクリック
+3. **デスクトップアプリ** を選択
+4. **クライアントID** と **クライアントシークレット** をコピー
+
+##### 4. MCP サーバーを設定
+
+MCP設定に環境変数を追加:
+
+**Claude Code** (`~/.claude.json`):
+```json
+{
+  "mcpServers": {
+    "google-workspace": {
+      "command": "/usr/local/bin/workspace-server",
+      "env": {
+        "GOOGLE_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
+        "GOOGLE_CLIENT_SECRET": "your-client-secret"
+      }
+    }
+  }
+}
+```
+
+**Claude Desktop** (`claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "google-workspace": {
+      "command": "/usr/local/bin/workspace-server",
+      "env": {
+        "GOOGLE_CLIENT_ID": "your-client-id.apps.googleusercontent.com",
+        "GOOGLE_CLIENT_SECRET": "your-client-secret"
+      }
+    }
+  }
+}
+```
+
+##### 5. 再認証
+
+設定後、MCPサーバーを再起動し、`auth.login` を再実行してください。
+
+</details>
 
 ### セキュリティ
 

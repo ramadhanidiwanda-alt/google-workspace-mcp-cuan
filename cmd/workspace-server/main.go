@@ -21,8 +21,22 @@ var (
 	BuildTime = "unknown"
 )
 
-// OAuth scopes required for Google Workspace APIs
-var scopes = []string{
+// Basic scopes - read-only, works with default OAuth
+var basicScopes = []string{
+	"https://www.googleapis.com/auth/documents.readonly",
+	"https://www.googleapis.com/auth/drive.readonly",
+	"https://www.googleapis.com/auth/calendar.readonly",
+	"https://www.googleapis.com/auth/chat.spaces.readonly",
+	"https://www.googleapis.com/auth/chat.messages.readonly",
+	"https://www.googleapis.com/auth/userinfo.profile",
+	"https://www.googleapis.com/auth/gmail.readonly",
+	"https://www.googleapis.com/auth/directory.readonly",
+	"https://www.googleapis.com/auth/presentations.readonly",
+	"https://www.googleapis.com/auth/spreadsheets.readonly",
+}
+
+// Full scopes - read/write, requires custom OAuth
+var fullScopes = []string{
 	"https://www.googleapis.com/auth/documents",
 	"https://www.googleapis.com/auth/drive",
 	"https://www.googleapis.com/auth/calendar",
@@ -52,7 +66,7 @@ func main() {
 	}
 
 	// Initialize auth manager
-	authManager := auth.NewAuthManager(scopes)
+	authManager := auth.NewAuthManager(basicScopes, fullScopes)
 
 	// Initialize services
 	driveService := services.NewDriveService(authManager)
