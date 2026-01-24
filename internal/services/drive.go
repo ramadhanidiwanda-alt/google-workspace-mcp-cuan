@@ -305,3 +305,288 @@ func getExportMimeType(googleMimeType string) string {
 		return "application/pdf"
 	}
 }
+
+// UploadFile uploads a file to Drive
+func (s *DriveService) UploadFile(ctx context.Context, localPath string, fileName *string, folderID *string, mimeType *string) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Open local file
+	f, err := os.Open(localPath)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+	defer f.Close()
+
+	// Determine file name
+	name := filepath.Base(localPath)
+	if fileName != nil && *fileName != "" {
+		name = *fileName
+	}
+
+	file := &drive.File{
+		Name: name,
+	}
+
+	if folderID != nil && *folderID != "" {
+		file.Parents = []string{*folderID}
+	}
+
+	if mimeType != nil && *mimeType != "" {
+		file.MimeType = *mimeType
+	}
+
+	result, err := client.Files.Create(file).
+		Media(f).
+		Fields("id, name, mimeType, size, webViewLink").
+		Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"id":          result.Id,
+		"name":        result.Name,
+		"mimeType":    result.MimeType,
+		"size":        result.Size,
+		"webViewLink": result.WebViewLink,
+	})
+}
+
+// CopyFile copies a file
+func (s *DriveService) CopyFile(ctx context.Context, fileID string, newName *string, folderID *string) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	copyFile := &drive.File{}
+	if newName != nil && *newName != "" {
+		copyFile.Name = *newName
+	}
+	if folderID != nil && *folderID != "" {
+		copyFile.Parents = []string{*folderID}
+	}
+
+	result, err := client.Files.Copy(fileID, copyFile).
+		Fields("id, name, mimeType, webViewLink").
+		Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"id":          result.Id,
+		"name":        result.Name,
+		"mimeType":    result.MimeType,
+		"webViewLink": result.WebViewLink,
+	})
+}
+
+// DeleteFile moves a file to trash or permanently deletes it
+func (s *DriveService) DeleteFile(ctx context.Context, fileID string, permanent bool) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	if permanent {
+		err = client.Files.Delete(fileID).Do()
+	} else {
+		_, err = client.Files.Update(fileID, &drive.File{Trashed: true}).Do()
+	}
+
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":    "success",
+		"fileId":    fileID,
+		"permanent": permanent,
+	})
+}
+
+// GetFileInfo gets detailed file information
+func (s *DriveService) GetFileInfo(ctx context.Context, fileID string) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	file, err := client.Files.Get(fileID).
+		Fields("id, name, mimeType, size, createdTime, modifiedTime, owners, parents, webViewLink, permissions").
+		Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	owners := make([]map[string]string, len(file.Owners))
+	for i, o := range file.Owners {
+		owners[i] = map[string]string{
+			"displayName":  o.DisplayName,
+			"emailAddress": o.EmailAddress,
+		}
+	}
+
+	permissions := make([]map[string]interface{}, len(file.Permissions))
+	for i, p := range file.Permissions {
+		permissions[i] = map[string]interface{}{
+			"id":           p.Id,
+			"type":         p.Type,
+			"role":         p.Role,
+			"emailAddress": p.EmailAddress,
+			"displayName":  p.DisplayName,
+		}
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"id":           file.Id,
+		"name":         file.Name,
+		"mimeType":     file.MimeType,
+		"size":         file.Size,
+		"createdTime":  file.CreatedTime,
+		"modifiedTime": file.ModifiedTime,
+		"owners":       owners,
+		"parents":      file.Parents,
+		"webViewLink":  file.WebViewLink,
+		"permissions":  permissions,
+	})
+}
+
+// ShareFile shares a file with a user or makes it public
+func (s *DriveService) ShareFile(ctx context.Context, fileID string, email *string, role string, shareType string) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	permission := &drive.Permission{
+		Role: role, // "reader", "writer", "commenter"
+		Type: shareType, // "user", "group", "domain", "anyone"
+	}
+
+	if email != nil && *email != "" {
+		permission.EmailAddress = *email
+	}
+
+	result, err := client.Permissions.Create(fileID, permission).
+		Fields("id, type, role, emailAddress").
+		Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"permissionId": result.Id,
+		"type":         result.Type,
+		"role":         result.Role,
+		"emailAddress": result.EmailAddress,
+	})
+}
+
+// RemoveShare removes a sharing permission
+func (s *DriveService) RemoveShare(ctx context.Context, fileID, permissionID string) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	err = client.Permissions.Delete(fileID, permissionID).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":       "success",
+		"fileId":       fileID,
+		"permissionId": permissionID,
+	})
+}
+
+// ListTrash lists files in trash
+func (s *DriveService) ListTrash(ctx context.Context, pageToken *string, pageSize *int) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	req := client.Files.List().
+		Q("trashed = true").
+		Fields("nextPageToken, files(id, name, mimeType, trashedTime)")
+
+	if pageSize != nil {
+		req.PageSize(int64(*pageSize))
+	} else {
+		req.PageSize(20)
+	}
+
+	if pageToken != nil && *pageToken != "" {
+		req.PageToken(*pageToken)
+	}
+
+	result, err := req.Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	files := make([]map[string]interface{}, len(result.Files))
+	for i, f := range result.Files {
+		files[i] = map[string]interface{}{
+			"id":          f.Id,
+			"name":        f.Name,
+			"mimeType":    f.MimeType,
+			"trashedTime": f.TrashedTime,
+		}
+	}
+
+	response := map[string]interface{}{
+		"files": files,
+	}
+	if result.NextPageToken != "" {
+		response["nextPageToken"] = result.NextPageToken
+	}
+
+	return JSONResponse(response)
+}
+
+// RestoreFile restores a file from trash
+func (s *DriveService) RestoreFile(ctx context.Context, fileID string) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	file, err := client.Files.Update(fileID, &drive.File{Trashed: false}).
+		Fields("id, name").
+		Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status": "success",
+		"id":     file.Id,
+		"name":   file.Name,
+	})
+}
+
+// EmptyTrash permanently deletes all files in trash
+func (s *DriveService) EmptyTrash(ctx context.Context) ToolResponse {
+	client, err := s.getDriveClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	err = client.Files.EmptyTrash().Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":  "success",
+		"message": "Trash emptied",
+	})
+}

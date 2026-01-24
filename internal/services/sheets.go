@@ -259,3 +259,186 @@ func formatAsText(values [][]interface{}) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// UpdateRange updates values in a specific range
+func (s *SheetsService) UpdateRange(ctx context.Context, spreadsheetID, rangeA1 string, values [][]interface{}) ToolResponse {
+	client, err := s.getSheetsClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	valueRange := &sheets.ValueRange{
+		Values: values,
+	}
+
+	result, err := client.Spreadsheets.Values.Update(spreadsheetID, rangeA1, valueRange).
+		ValueInputOption("USER_ENTERED").
+		Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"spreadsheetId":  result.SpreadsheetId,
+		"updatedRange":   result.UpdatedRange,
+		"updatedRows":    result.UpdatedRows,
+		"updatedColumns": result.UpdatedColumns,
+		"updatedCells":   result.UpdatedCells,
+	})
+}
+
+// AppendRows appends rows to a sheet
+func (s *SheetsService) AppendRows(ctx context.Context, spreadsheetID, rangeA1 string, values [][]interface{}) ToolResponse {
+	client, err := s.getSheetsClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	valueRange := &sheets.ValueRange{
+		Values: values,
+	}
+
+	result, err := client.Spreadsheets.Values.Append(spreadsheetID, rangeA1, valueRange).
+		ValueInputOption("USER_ENTERED").
+		InsertDataOption("INSERT_ROWS").
+		Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"spreadsheetId": result.SpreadsheetId,
+		"tableRange":    result.TableRange,
+		"updatedRange":  result.Updates.UpdatedRange,
+		"updatedRows":   result.Updates.UpdatedRows,
+		"updatedCells":  result.Updates.UpdatedCells,
+	})
+}
+
+// ClearRange clears values in a range
+func (s *SheetsService) ClearRange(ctx context.Context, spreadsheetID, rangeA1 string) ToolResponse {
+	client, err := s.getSheetsClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	result, err := client.Spreadsheets.Values.Clear(spreadsheetID, rangeA1, &sheets.ClearValuesRequest{}).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"spreadsheetId": result.SpreadsheetId,
+		"clearedRange":  result.ClearedRange,
+	})
+}
+
+// CreateSheet creates a new sheet in a spreadsheet
+func (s *SheetsService) CreateSheet(ctx context.Context, spreadsheetID, sheetTitle string) ToolResponse {
+	client, err := s.getSheetsClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	req := &sheets.BatchUpdateSpreadsheetRequest{
+		Requests: []*sheets.Request{
+			{
+				AddSheet: &sheets.AddSheetRequest{
+					Properties: &sheets.SheetProperties{
+						Title: sheetTitle,
+					},
+				},
+			},
+		},
+	}
+
+	result, err := client.Spreadsheets.BatchUpdate(spreadsheetID, req).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	var sheetID int64
+	if len(result.Replies) > 0 && result.Replies[0].AddSheet != nil {
+		sheetID = result.Replies[0].AddSheet.Properties.SheetId
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"spreadsheetId": spreadsheetID,
+		"sheetId":       sheetID,
+		"sheetTitle":    sheetTitle,
+	})
+}
+
+// DeleteSheet deletes a sheet from a spreadsheet
+func (s *SheetsService) DeleteSheet(ctx context.Context, spreadsheetID string, sheetID int64) ToolResponse {
+	client, err := s.getSheetsClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	req := &sheets.BatchUpdateSpreadsheetRequest{
+		Requests: []*sheets.Request{
+			{
+				DeleteSheet: &sheets.DeleteSheetRequest{
+					SheetId: sheetID,
+				},
+			},
+		},
+	}
+
+	_, err = client.Spreadsheets.BatchUpdate(spreadsheetID, req).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":        "success",
+		"spreadsheetId": spreadsheetID,
+		"deletedSheet":  sheetID,
+	})
+}
+
+// Create creates a new spreadsheet
+func (s *SheetsService) Create(ctx context.Context, title string, sheetTitles []string) ToolResponse {
+	client, err := s.getSheetsClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	spreadsheet := &sheets.Spreadsheet{
+		Properties: &sheets.SpreadsheetProperties{
+			Title: title,
+		},
+	}
+
+	if len(sheetTitles) > 0 {
+		spreadsheet.Sheets = make([]*sheets.Sheet, len(sheetTitles))
+		for i, sheetTitle := range sheetTitles {
+			spreadsheet.Sheets[i] = &sheets.Sheet{
+				Properties: &sheets.SheetProperties{
+					Title: sheetTitle,
+				},
+			}
+		}
+	}
+
+	result, err := client.Spreadsheets.Create(spreadsheet).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	sheetsInfo := make([]map[string]interface{}, len(result.Sheets))
+	for i, sheet := range result.Sheets {
+		sheetsInfo[i] = map[string]interface{}{
+			"sheetId": sheet.Properties.SheetId,
+			"title":   sheet.Properties.Title,
+		}
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"spreadsheetId": result.SpreadsheetId,
+		"title":         result.Properties.Title,
+		"spreadsheetUrl": result.SpreadsheetUrl,
+		"sheets":        sheetsInfo,
+	})
+}

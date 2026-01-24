@@ -182,4 +182,161 @@ func (r *ToolRegistrar) registerGmailTools() {
 			return mcp.NewToolResultText(resp.Content[0].Text), nil
 		},
 	)
+
+	// gmail.sendWithAttachments
+	r.server.AddTool(
+		mcp.NewTool("gmail.sendWithAttachments",
+			mcp.WithDescription("Sends an email with file attachments."),
+			mcp.WithString("to", mcp.Required(), mcp.Description("Recipient email address")),
+			mcp.WithString("subject", mcp.Required(), mcp.Description("Email subject")),
+			mcp.WithString("body", mcp.Required(), mcp.Description("Email body")),
+			mcp.WithArray("attachmentPaths", mcp.Required(), mcp.Description("Array of local file paths to attach")),
+			mcp.WithBoolean("isHtml", mcp.Description("Whether body is HTML content")),
+			mcp.WithString("cc", mcp.Description("CC recipients (comma-separated)")),
+			mcp.WithString("bcc", mcp.Description("BCC recipients (comma-separated)")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			to := args["to"].(string)
+			subject := args["subject"].(string)
+			body := args["body"].(string)
+			rawPaths := args["attachmentPaths"].([]interface{})
+			paths := make([]string, len(rawPaths))
+			for i, p := range rawPaths {
+				paths[i] = p.(string)
+			}
+			isHTML := false
+			if v, ok := args["isHtml"].(bool); ok {
+				isHTML = v
+			}
+			var cc, bcc *string
+			if v, ok := args["cc"].(string); ok && v != "" {
+				cc = &v
+			}
+			if v, ok := args["bcc"].(string); ok && v != "" {
+				bcc = &v
+			}
+			resp := r.services.Gmail.SendWithAttachments(ctx, to, subject, body, paths, isHTML, cc, bcc)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// gmail.createLabel
+	r.server.AddTool(
+		mcp.NewTool("gmail.createLabel",
+			mcp.WithDescription("Creates a new Gmail label."),
+			mcp.WithString("name", mcp.Required(), mcp.Description("Label name")),
+			mcp.WithString("labelListVisibility", mcp.Description("Label visibility: labelShow, labelShowIfUnread, labelHide")),
+			mcp.WithString("messageListVisibility", mcp.Description("Message list visibility: show, hide")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			name := args["name"].(string)
+			var labelListVisibility, messageListVisibility *string
+			if v, ok := args["labelListVisibility"].(string); ok && v != "" {
+				labelListVisibility = &v
+			}
+			if v, ok := args["messageListVisibility"].(string); ok && v != "" {
+				messageListVisibility = &v
+			}
+			resp := r.services.Gmail.CreateLabel(ctx, name, labelListVisibility, messageListVisibility)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// gmail.deleteLabel
+	r.server.AddTool(
+		mcp.NewTool("gmail.deleteLabel",
+			mcp.WithDescription("Deletes a Gmail label."),
+			mcp.WithString("labelId", mcp.Required(), mcp.Description("The ID of the label to delete")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			labelID := args["labelId"].(string)
+			resp := r.services.Gmail.DeleteLabel(ctx, labelID)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// gmail.trashMessage
+	r.server.AddTool(
+		mcp.NewTool("gmail.trashMessage",
+			mcp.WithDescription("Moves a message to trash."),
+			mcp.WithString("messageId", mcp.Required(), mcp.Description("The ID of the message")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			messageID := args["messageId"].(string)
+			resp := r.services.Gmail.TrashMessage(ctx, messageID)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// gmail.untrashMessage
+	r.server.AddTool(
+		mcp.NewTool("gmail.untrashMessage",
+			mcp.WithDescription("Removes a message from trash."),
+			mcp.WithString("messageId", mcp.Required(), mcp.Description("The ID of the message")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			messageID := args["messageId"].(string)
+			resp := r.services.Gmail.UntrashMessage(ctx, messageID)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// gmail.getVacationSettings
+	r.server.AddTool(
+		mcp.NewTool("gmail.getVacationSettings",
+			mcp.WithDescription("Gets vacation auto-reply settings."),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			resp := r.services.Gmail.GetVacationSettings(ctx)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
+
+	// gmail.setVacationSettings
+	r.server.AddTool(
+		mcp.NewTool("gmail.setVacationSettings",
+			mcp.WithDescription("Sets vacation auto-reply settings."),
+			mcp.WithBoolean("enable", mcp.Required(), mcp.Description("Enable or disable auto-reply")),
+			mcp.WithString("subject", mcp.Description("Auto-reply subject")),
+			mcp.WithString("body", mcp.Description("Auto-reply body (HTML)")),
+			mcp.WithNumber("startTime", mcp.Description("Start time (Unix timestamp in ms)")),
+			mcp.WithNumber("endTime", mcp.Description("End time (Unix timestamp in ms)")),
+			mcp.WithBoolean("restrictToContacts", mcp.Description("Only reply to contacts")),
+			mcp.WithBoolean("restrictToDomain", mcp.Description("Only reply to same domain")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.Params.Arguments.(map[string]interface{})
+			enable := args["enable"].(bool)
+			var subject, body *string
+			var startTime, endTime *int64
+			var restrictToContacts, restrictToDomain *bool
+			if v, ok := args["subject"].(string); ok && v != "" {
+				subject = &v
+			}
+			if v, ok := args["body"].(string); ok && v != "" {
+				body = &v
+			}
+			if v, ok := args["startTime"].(float64); ok {
+				st := int64(v)
+				startTime = &st
+			}
+			if v, ok := args["endTime"].(float64); ok {
+				et := int64(v)
+				endTime = &et
+			}
+			if v, ok := args["restrictToContacts"].(bool); ok {
+				restrictToContacts = &v
+			}
+			if v, ok := args["restrictToDomain"].(bool); ok {
+				restrictToDomain = &v
+			}
+			resp := r.services.Gmail.SetVacationSettings(ctx, enable, subject, body, startTime, endTime, restrictToContacts, restrictToDomain)
+			return mcp.NewToolResultText(resp.Content[0].Text), nil
+		},
+	)
 }

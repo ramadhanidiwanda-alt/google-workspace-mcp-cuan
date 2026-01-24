@@ -467,3 +467,236 @@ func extractAttachmentInfo(payload *gmail.MessagePart) []map[string]interface{} 
 
 	return attachments
 }
+
+// SendWithAttachments sends an email with file attachments
+func (s *GmailService) SendWithAttachments(ctx context.Context, to, subject, body string, attachmentPaths []string, isHTML bool, cc, bcc *string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	boundary := "boundary_" + fmt.Sprintf("%d", generateMessageID())
+
+	var msg strings.Builder
+	msg.WriteString(fmt.Sprintf("To: %s\r\n", to))
+	if cc != nil && *cc != "" {
+		msg.WriteString(fmt.Sprintf("Cc: %s\r\n", *cc))
+	}
+	if bcc != nil && *bcc != "" {
+		msg.WriteString(fmt.Sprintf("Bcc: %s\r\n", *bcc))
+	}
+	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	msg.WriteString("MIME-Version: 1.0\r\n")
+	msg.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=\"%s\"\r\n", boundary))
+	msg.WriteString("\r\n")
+
+	// Body part
+	msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+	contentType := "text/plain"
+	if isHTML {
+		contentType = "text/html"
+	}
+	msg.WriteString(fmt.Sprintf("Content-Type: %s; charset=UTF-8\r\n", contentType))
+	msg.WriteString("\r\n")
+	msg.WriteString(body)
+	msg.WriteString("\r\n")
+
+	// Attachment parts
+	for _, path := range attachmentPaths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return ErrorResponse(fmt.Errorf("failed to read attachment %s: %w", path, err))
+		}
+
+		filename := filepath.Base(path)
+		encoded := base64.StdEncoding.EncodeToString(data)
+
+		msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+		msg.WriteString(fmt.Sprintf("Content-Type: application/octet-stream; name=\"%s\"\r\n", filename))
+		msg.WriteString("Content-Transfer-Encoding: base64\r\n")
+		msg.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n", filename))
+		msg.WriteString("\r\n")
+
+		// Write base64 data in chunks of 76 characters
+		for i := 0; i < len(encoded); i += 76 {
+			end := i + 76
+			if end > len(encoded) {
+				end = len(encoded)
+			}
+			msg.WriteString(encoded[i:end])
+			msg.WriteString("\r\n")
+		}
+	}
+
+	msg.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
+
+	raw := base64.URLEncoding.EncodeToString([]byte(msg.String()))
+
+	result, err := client.Users.Messages.Send("me", &gmail.Message{
+		Raw: raw,
+	}).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]string{
+		"messageId": result.Id,
+		"threadId":  result.ThreadId,
+	})
+}
+
+var messageIDCounter int64
+
+func generateMessageID() int64 {
+	messageIDCounter++
+	return messageIDCounter
+}
+
+// CreateLabel creates a new Gmail label
+func (s *GmailService) CreateLabel(ctx context.Context, name string, labelListVisibility, messageListVisibility *string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	label := &gmail.Label{
+		Name: name,
+	}
+
+	if labelListVisibility != nil && *labelListVisibility != "" {
+		label.LabelListVisibility = *labelListVisibility
+	}
+	if messageListVisibility != nil && *messageListVisibility != "" {
+		label.MessageListVisibility = *messageListVisibility
+	}
+
+	result, err := client.Users.Labels.Create("me", label).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"id":                    result.Id,
+		"name":                  result.Name,
+		"labelListVisibility":   result.LabelListVisibility,
+		"messageListVisibility": result.MessageListVisibility,
+	})
+}
+
+// DeleteLabel deletes a Gmail label
+func (s *GmailService) DeleteLabel(ctx context.Context, labelID string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	err = client.Users.Labels.Delete("me", labelID).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":  "success",
+		"labelId": labelID,
+	})
+}
+
+// GetVacationSettings gets vacation auto-reply settings
+func (s *GmailService) GetVacationSettings(ctx context.Context) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	settings, err := client.Users.Settings.GetVacation("me").Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"enableAutoReply":    settings.EnableAutoReply,
+		"responseSubject":    settings.ResponseSubject,
+		"responseBodyHtml":   settings.ResponseBodyHtml,
+		"startTime":          settings.StartTime,
+		"endTime":            settings.EndTime,
+		"restrictToContacts": settings.RestrictToContacts,
+		"restrictToDomain":   settings.RestrictToDomain,
+	})
+}
+
+// SetVacationSettings sets vacation auto-reply settings
+func (s *GmailService) SetVacationSettings(ctx context.Context, enable bool, subject, body *string, startTime, endTime *int64, restrictToContacts, restrictToDomain *bool) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	settings := &gmail.VacationSettings{
+		EnableAutoReply: enable,
+	}
+
+	if subject != nil {
+		settings.ResponseSubject = *subject
+	}
+	if body != nil {
+		settings.ResponseBodyHtml = *body
+	}
+	if startTime != nil {
+		settings.StartTime = *startTime
+	}
+	if endTime != nil {
+		settings.EndTime = *endTime
+	}
+	if restrictToContacts != nil {
+		settings.RestrictToContacts = *restrictToContacts
+	}
+	if restrictToDomain != nil {
+		settings.RestrictToDomain = *restrictToDomain
+	}
+
+	result, err := client.Users.Settings.UpdateVacation("me", settings).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":          "success",
+		"enableAutoReply": result.EnableAutoReply,
+	})
+}
+
+// TrashMessage moves a message to trash
+func (s *GmailService) TrashMessage(ctx context.Context, messageID string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	_, err = client.Users.Messages.Trash("me", messageID).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":    "success",
+		"messageId": messageID,
+	})
+}
+
+// UntrashMessage removes a message from trash
+func (s *GmailService) UntrashMessage(ctx context.Context, messageID string) ToolResponse {
+	client, err := s.getGmailClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	_, err = client.Users.Messages.Untrash("me", messageID).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":    "success",
+		"messageId": messageID,
+	})
+}

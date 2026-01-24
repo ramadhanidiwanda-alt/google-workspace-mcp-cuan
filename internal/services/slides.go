@@ -181,3 +181,235 @@ func extractSlideText(slide *slides.Page) string {
 
 	return strings.Join(texts, "")
 }
+
+// Create creates a new presentation
+func (s *SlidesService) Create(ctx context.Context, title string) ToolResponse {
+	client, err := s.getSlidesClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	presentation := &slides.Presentation{
+		Title: title,
+	}
+
+	result, err := client.Presentations.Create(presentation).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"presentationId": result.PresentationId,
+		"title":          result.Title,
+		"slideCount":     len(result.Slides),
+	})
+}
+
+// AddSlide adds a new slide to a presentation
+func (s *SlidesService) AddSlide(ctx context.Context, presentationID string, layout *string, insertionIndex *int) ToolResponse {
+	client, err := s.getSlidesClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	// Use predefined layout
+	layoutName := "BLANK"
+	if layout != nil && *layout != "" {
+		layoutName = strings.ToUpper(*layout)
+	}
+
+	req := &slides.Request{
+		CreateSlide: &slides.CreateSlideRequest{
+			SlideLayoutReference: &slides.LayoutReference{
+				PredefinedLayout: layoutName,
+			},
+		},
+	}
+
+	if insertionIndex != nil {
+		req.CreateSlide.InsertionIndex = int64(*insertionIndex)
+	}
+
+	result, err := client.Presentations.BatchUpdate(presentationID, &slides.BatchUpdatePresentationRequest{
+		Requests: []*slides.Request{req},
+	}).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	var slideID string
+	if len(result.Replies) > 0 && result.Replies[0].CreateSlide != nil {
+		slideID = result.Replies[0].CreateSlide.ObjectId
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"presentationId": presentationID,
+		"slideId":        slideID,
+	})
+}
+
+// DeleteSlide deletes a slide from a presentation
+func (s *SlidesService) DeleteSlide(ctx context.Context, presentationID, slideID string) ToolResponse {
+	client, err := s.getSlidesClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	_, err = client.Presentations.BatchUpdate(presentationID, &slides.BatchUpdatePresentationRequest{
+		Requests: []*slides.Request{
+			{
+				DeleteObject: &slides.DeleteObjectRequest{
+					ObjectId: slideID,
+				},
+			},
+		},
+	}).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":         "success",
+		"presentationId": presentationID,
+		"deletedSlide":   slideID,
+	})
+}
+
+// AddTextBox adds a text box to a slide
+func (s *SlidesService) AddTextBox(ctx context.Context, presentationID, slideID, text string, x, y, width, height float64) ToolResponse {
+	client, err := s.getSlidesClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	elementID := fmt.Sprintf("textbox_%d", generateID())
+
+	requests := []*slides.Request{
+		{
+			CreateShape: &slides.CreateShapeRequest{
+				ObjectId:  elementID,
+				ShapeType: "TEXT_BOX",
+				ElementProperties: &slides.PageElementProperties{
+					PageObjectId: slideID,
+					Size: &slides.Size{
+						Width:  &slides.Dimension{Magnitude: width, Unit: "PT"},
+						Height: &slides.Dimension{Magnitude: height, Unit: "PT"},
+					},
+					Transform: &slides.AffineTransform{
+						ScaleX:     1,
+						ScaleY:     1,
+						TranslateX: x,
+						TranslateY: y,
+						Unit:       "PT",
+					},
+				},
+			},
+		},
+		{
+			InsertText: &slides.InsertTextRequest{
+				ObjectId: elementID,
+				Text:     text,
+			},
+		},
+	}
+
+	_, err = client.Presentations.BatchUpdate(presentationID, &slides.BatchUpdatePresentationRequest{
+		Requests: requests,
+	}).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"presentationId": presentationID,
+		"slideId":        slideID,
+		"elementId":      elementID,
+	})
+}
+
+// AddImage adds an image to a slide
+func (s *SlidesService) AddImage(ctx context.Context, presentationID, slideID, imageURL string, x, y, width, height float64) ToolResponse {
+	client, err := s.getSlidesClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	elementID := fmt.Sprintf("image_%d", generateID())
+
+	_, err = client.Presentations.BatchUpdate(presentationID, &slides.BatchUpdatePresentationRequest{
+		Requests: []*slides.Request{
+			{
+				CreateImage: &slides.CreateImageRequest{
+					ObjectId: elementID,
+					Url:      imageURL,
+					ElementProperties: &slides.PageElementProperties{
+						PageObjectId: slideID,
+						Size: &slides.Size{
+							Width:  &slides.Dimension{Magnitude: width, Unit: "PT"},
+							Height: &slides.Dimension{Magnitude: height, Unit: "PT"},
+						},
+						Transform: &slides.AffineTransform{
+							ScaleX:     1,
+							ScaleY:     1,
+							TranslateX: x,
+							TranslateY: y,
+							Unit:       "PT",
+						},
+					},
+				},
+			},
+		},
+	}).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"presentationId": presentationID,
+		"slideId":        slideID,
+		"elementId":      elementID,
+	})
+}
+
+// UpdateText updates text in a shape
+func (s *SlidesService) UpdateText(ctx context.Context, presentationID, shapeID, text string) ToolResponse {
+	client, err := s.getSlidesClient(ctx)
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	_, err = client.Presentations.BatchUpdate(presentationID, &slides.BatchUpdatePresentationRequest{
+		Requests: []*slides.Request{
+			{
+				DeleteText: &slides.DeleteTextRequest{
+					ObjectId: shapeID,
+					TextRange: &slides.Range{
+						Type: "ALL",
+					},
+				},
+			},
+			{
+				InsertText: &slides.InsertTextRequest{
+					ObjectId: shapeID,
+					Text:     text,
+				},
+			},
+		},
+	}).Do()
+	if err != nil {
+		return ErrorResponse(err)
+	}
+
+	return JSONResponse(map[string]interface{}{
+		"status":         "success",
+		"presentationId": presentationID,
+		"shapeId":        shapeID,
+	})
+}
+
+var idCounter int64
+
+func generateID() int64 {
+	idCounter++
+	return idCounter
+}

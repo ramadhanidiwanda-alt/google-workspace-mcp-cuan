@@ -131,11 +131,18 @@ auth.clear
 | `gmail.search` | Search emails |
 | `gmail.get` | Get email content |
 | `gmail.send` | Send an email |
+| `gmail.sendWithAttachments` | Send with file attachments |
 | `gmail.createDraft` | Create a draft |
 | `gmail.sendDraft` | Send a draft |
 | `gmail.modify` | Add/remove labels |
 | `gmail.listLabels` | List all labels |
+| `gmail.createLabel` | Create a label |
+| `gmail.deleteLabel` | Delete a label |
 | `gmail.downloadAttachment` | Download attachment |
+| `gmail.trashMessage` | Move to trash |
+| `gmail.untrashMessage` | Restore from trash |
+| `gmail.getVacationSettings` | Get vacation settings |
+| `gmail.setVacationSettings` | Set vacation auto-reply |
 
 </details>
 
@@ -148,6 +155,16 @@ auth.clear
 | `drive.findFolder` | Find folder by name |
 | `drive.createFolder` | Create a new folder |
 | `drive.downloadFile` | Download a file |
+| `drive.uploadFile` | Upload a local file |
+| `drive.copyFile` | Copy a file |
+| `drive.moveFile` | Move a file to folder |
+| `drive.deleteFile` | Trash or permanently delete |
+| `drive.getFileInfo` | Get detailed file info |
+| `drive.shareFile` | Share with user or public |
+| `drive.removeShare` | Remove sharing permission |
+| `drive.listTrash` | List files in trash |
+| `drive.restoreFile` | Restore from trash |
+| `drive.emptyTrash` | Empty trash |
 
 </details>
 
@@ -176,6 +193,12 @@ auth.clear
 | `sheets.getRange` | Get values from range |
 | `sheets.getMetadata` | Get spreadsheet metadata |
 | `sheets.find` | Search spreadsheets by title |
+| `sheets.create` | Create a new spreadsheet |
+| `sheets.updateRange` | Update values in range |
+| `sheets.appendRows` | Append rows to sheet |
+| `sheets.clearRange` | Clear values in range |
+| `sheets.createSheet` | Create new sheet tab |
+| `sheets.deleteSheet` | Delete sheet tab |
 
 </details>
 
@@ -187,6 +210,12 @@ auth.clear
 | `slides.getText` | Get presentation text |
 | `slides.getMetadata` | Get presentation metadata |
 | `slides.find` | Search presentations by title |
+| `slides.create` | Create new presentation |
+| `slides.addSlide` | Add a new slide |
+| `slides.deleteSlide` | Delete a slide |
+| `slides.addTextBox` | Add text box to slide |
+| `slides.addImage` | Add image to slide |
+| `slides.updateText` | Update text in shape |
 
 </details>
 
