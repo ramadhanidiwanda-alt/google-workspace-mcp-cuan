@@ -13,7 +13,9 @@
     "build": "node esbuild.config.js",
     "build:auth-utils": "node esbuild.auth-utils.js",
     "build:cuan-sheets": "node esbuild.cuan-sheets.js",
-    "start:cuan-sheets": "node dist/cuan-sheets.js"
+    "build:cuan-workspace": "node esbuild.cuan-workspace.js",
+    "start:cuan-sheets": "node dist/cuan-sheets.js",
+    "start:cuan-workspace": "node dist/cuan-workspace.js"
   },
   "keywords": [],
   "author": "Allen Hutchison",
