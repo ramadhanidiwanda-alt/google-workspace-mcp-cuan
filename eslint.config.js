@@ -99,4 +99,23 @@ module.exports = [
           'import/enforce-node-protocol-usage': ['error', 'always'],
         },
       },
+    {
+        files: [
+          'workspace-server/src/hostedSheets/**/*.ts',
+          'workspace-server/src/cuanSheetsHost.ts',
+          'workspace-server/src/__tests__/hostedSheets/**/*.test.ts',
+        ],
+        rules: {
+          'license-header/header': [
+            'error',
+            [
+              '/**',
+              ' * @license',
+              ' * Copyright 2026 Ramadhani Diwanda',
+              ' * SPDX-License-Identifier: Apache-2.0',
+              ' */',
+            ],
+          ],
+        },
+      },
 ];

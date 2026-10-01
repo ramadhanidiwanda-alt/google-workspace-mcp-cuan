@@ -93,6 +93,16 @@ auth.login
 auth.clear
 ```
 
+### Cuan hosted Google Sheets service (opt-in)
+
+`Dockerfile.cuan` builds a separate HTTP MCP service for deployments where Cuan Insight owns Google credentials. It is independent of the local OAuth server above and registers exactly two tools: `sheets_read_values` and `sheets_update_values`. Hosted mode does not use local OAuth, ADC, or persisted provider tokens.
+
+The server listens on `/mcp` (port `8080` by default) and requires one `x-cuan-mcp-connection-key` header (`ci_mcp_ck_` followed by 64 lowercase hex characters). Cuan validates the key and returns a short-lived, range-bound Sheets credential to the service. Reads require one quoted sheet name and a rectangular A1 range of at most 100 cells, such as `'Data Sheet'!A1:B10`.
+
+`sheets_update_values` is two phase. First call supplies `expectedOldValues` and `newValues` and returns a digest plus preview and execution IDs without writing. A second call must repeat the same values and IDs with `confirmed: true` and the exact returned digest. Cuan's claim policy runs before the provider write; the service rereads before writing, uses `RAW`, verifies the result, and finalizes either `CONFIRMED` or `UNKNOWN_OUTCOME`. A timeout after write dispatch is never retried.
+
+The container defaults to disabled and exits unless explicitly enabled. Configure `CUAN_SHEETS_MCP_ENABLED=true`, `CUAN_SHEETS_RUNTIME_URL` (HTTPS), `GOOGLE_SHEETS_PRIVATE_SERVICE_ID`, and `GOOGLE_SHEETS_PRIVATE_SERVICE_SECRET` only in the private deployment environment. Build with `docker build -f Dockerfile.cuan -t cuan-google-sheets-mcp .`; run behind an authenticated private gateway. No deployment is performed by this repository change.
+
 ### Access Modes
 
 This server supports two access modes:
