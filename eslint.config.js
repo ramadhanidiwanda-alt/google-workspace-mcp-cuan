@@ -104,6 +104,11 @@ module.exports = [
           'workspace-server/src/hostedSheets/**/*.ts',
           'workspace-server/src/cuanSheetsHost.ts',
           'workspace-server/src/__tests__/hostedSheets/**/*.test.ts',
+          'workspace-server/src/hostedWorkspace/**/*.ts',
+          'workspace-server/src/cuanWorkspaceHost.ts',
+          'workspace-server/src/__tests__/hostedWorkspace/**/*.test.ts',
+          'workspace-server/esbuild.cuan-sheets.js',
+          'workspace-server/esbuild.cuan-workspace.js',
         ],
         rules: {
           'license-header/header': [

@@ -103,6 +103,14 @@ The server listens on `/mcp` (port `8080` by default) and requires the exact `Ho
 
 The container defaults to disabled and exits unless explicitly enabled. Configure `CUAN_SHEETS_MCP_ENABLED=true`, `CUAN_SHEETS_RUNTIME_URL` (HTTPS), `GOOGLE_SHEETS_PRIVATE_SERVICE_ID`, and `GOOGLE_SHEETS_PRIVATE_SERVICE_SECRET` only in the private deployment environment. Build with `docker build -f Dockerfile.cuan -t cuan-google-sheets-mcp .`; run behind an authenticated private gateway. No deployment is performed by this repository change.
 
+### Cuan hosted Google Workspace service (opt-in)
+
+`Dockerfile.workspace` builds the separate broad Workspace MCP service. It exposes only `workspace_drive_list_files`, `workspace_drive_get_file`, `workspace_drive_get_text`, `workspace_sheets_read_values`, `workspace_drive_create_text_file`, `workspace_drive_update_text_file`, and `workspace_sheets_update_values`. File discovery and access span the connected Google account, subject to Cuan Connection Key grants and Google permissions. Text content is limited to plain text files and Google Docs exported as plain text. This service has no delete, sharing, or move tools. Existing hosted Sheets and local OAuth modes remain separate.
+
+The service listens on `/mcp` and requires the exact configured Host, one `x-cuan-workspace-ingress-secret`, and one `x-cuan-mcp-connection-key`. Set `CUAN_WORKSPACE_MCP_ALLOWED_HOST`, `CUAN_WORKSPACE_INGRESS_SECRET` (at least 32 characters), `CUAN_WORKSPACE_RUNTIME_URL` (HTTPS), `GOOGLE_WORKSPACE_PRIVATE_SERVICE_ID`, `GOOGLE_WORKSPACE_PRIVATE_SERVICE_SECRET`, and `CUAN_WORKSPACE_MCP_ENABLED=true` in the private environment. Build with `docker build -f Dockerfile.workspace -t cuan-google-workspace-mcp .`. Keep the container disabled until Cuan's broad Workspace provider policy and Google pilot gates pass.
+
+Every write first returns a preview ID and approval digest. The service sends Cuan a bounded summary of current and proposed content for admin review. Repeat the same input with `confirmed: true`, `previewId`, and `approvalDigest` to request a write. Cuan checks the exact key, tool, account, target, digest, and credential version, then atomically claims one execution. After a dispatched provider write, the service reads back Drive content or Sheets values before finalizing `CONFIRMED`; a failed or mismatched readback becomes `UNKNOWN_OUTCOME`. It never retries the write. Access tokens stay in private resolver responses and provider requests, never MCP results.
+
 ### Access Modes
 
 This server supports two access modes:
