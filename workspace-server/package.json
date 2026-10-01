@@ -11,7 +11,9 @@
     "start": "ts-node src/index.ts",
     "clean": "rm -rf dist node_modules",
     "build": "node esbuild.config.js",
-    "build:auth-utils": "node esbuild.auth-utils.js"
+    "build:auth-utils": "node esbuild.auth-utils.js",
+    "build:cuan-sheets": "node esbuild.cuan-sheets.js",
+    "start:cuan-sheets": "node dist/cuan-sheets.js"
   },
   "keywords": [],
   "author": "Allen Hutchison",
