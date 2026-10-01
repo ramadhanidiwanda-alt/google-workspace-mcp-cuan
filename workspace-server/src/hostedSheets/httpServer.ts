@@ -5,14 +5,38 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { GoogleSheetsHostedService, HostedSheetsError } from './GoogleSheetsHostedService';
 
 const keyName='x-cuan-mcp-connection-key';
+const ingressName='x-cuan-sheets-ingress-secret';
+const hostName='host';
+const MIN_INGRESS_SECRET_LENGTH=32;
+export interface HostedHttpBoundary { allowedHost:string; ingressSecret:string; }
+function validateBoundary(boundary:HostedHttpBoundary) {
+  if(!/^[a-z0-9.-]+$/.test(boundary.allowedHost)) throw new Error('CUAN_SHEETS_MCP_ALLOWED_HOST must be a canonical hostname');
+  if(boundary.ingressSecret.length<MIN_INGRESS_SECRET_LENGTH) throw new Error('CUAN_SHEETS_INGRESS_SECRET must contain at least 32 characters');
+}
+function rawHeaderValues(req:IncomingMessage,name:string):string[] {
+  const found:string[]=[]; for(let i=0;i<req.rawHeaders.length;i+=2) if(req.rawHeaders[i].toLowerCase()===name) found.push(req.rawHeaders[i+1]);
+  return found;
+}
+function exactHost(req:IncomingMessage,allowedHost:string):boolean {
+  const values=rawHeaderValues(req,hostName);
+  return values.length===1 && values[0]===allowedHost;
+}
+function validIngress(req:IncomingMessage,expected:string):boolean {
+  const values=rawHeaderValues(req,ingressName);
+  if(values.length!==1) return false;
+  const actual=Buffer.from(values[0]);
+  const wanted=Buffer.from(expected);
+  return actual.length===wanted.length && timingSafeEqual(actual,wanted);
+}
 function rawKey(req:IncomingMessage):string|undefined {
-  const found:string[]=[]; for(let i=0;i<req.rawHeaders.length;i+=2) if(req.rawHeaders[i].toLowerCase()===keyName) found.push(req.rawHeaders[i+1]);
+  const found=rawHeaderValues(req,keyName);
   return found.length===1 && /^ci_mcp_ck_[0-9a-f]{64}$/.test(found[0]) ? found[0] : undefined;
 }
 function fail(res:ServerResponse,status:number,code:string) { res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify({error:code})); }
@@ -34,10 +58,13 @@ function createMcp(key:string,service:GoogleSheetsHostedService) {
   });
   return server;
 }
-export function createHostedHttpServer(service:GoogleSheetsHostedService) {
+export function createHostedHttpServer(service:GoogleSheetsHostedService,boundary:HostedHttpBoundary) {
+  validateBoundary(boundary);
   return createServer(async (req,res)=>{
+    if(!exactHost(req,boundary.allowedHost)){fail(res,421,'MISDIRECTED_REQUEST');return;}
     if(req.url!=='/mcp'){fail(res,404,'NOT_FOUND');return;}
     if(req.method!=='POST'){fail(res,405,'METHOD_NOT_ALLOWED');return;}
+    if(!validIngress(req,boundary.ingressSecret)){fail(res,401,'UNAUTHENTICATED');return;}
     const key=rawKey(req);if(!key){fail(res,401,'UNAUTHENTICATED');return;}
     const contentLength=Number(req.headers['content-length'] ?? 0);
     if(contentLength>32768){fail(res,413,'REQUEST_TOO_LARGE');return;}
@@ -54,5 +81,6 @@ export function createHostedHttpServer(service:GoogleSheetsHostedService) {
   });
 }
 export function startHostedHttpServer(service:GoogleSheetsHostedService,host='0.0.0.0',port=8080) {
-  const server=createHostedHttpServer(service); server.listen(port,host); return server;
+  const boundary={allowedHost:process.env.CUAN_SHEETS_MCP_ALLOWED_HOST??'',ingressSecret:process.env.CUAN_SHEETS_INGRESS_SECRET??''};
+  const server=createHostedHttpServer(service,boundary); server.listen(port,host); return server;
 }
