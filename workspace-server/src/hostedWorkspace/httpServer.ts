@@ -58,6 +58,15 @@ function createMcp(key: string, service: GoogleWorkspaceHostedService) {
       }
     });
   };
+  if (!key) {
+    for (const name of ['workspace_drive_list_files', 'workspace_drive_get_file', 'workspace_drive_get_text',
+      'workspace_sheets_read_values', 'workspace_drive_create_text_file', 'workspace_drive_update_text_file',
+      'workspace_sheets_update_values']) {
+      register(name, 'Cuan-admitted Google Workspace operation.',
+        { googleInvocation: z.record(z.string(), z.unknown()) }, args => service.invokeUnified(name, args.googleInvocation));
+    }
+    return server;
+  }
   register('workspace_drive_list_files', 'List up to 100 files accessible to the connected Google account.', { pageSize: z.number().int().min(1).max(100).optional(), pageToken: z.string().optional() }, args => service.listFiles(key, args));
   register('workspace_drive_get_file', 'Read Drive file metadata.', { fileId: z.string() }, args => service.getFile(key, args));
   register('workspace_drive_get_text', 'Read bounded plain text or Google Docs text.', { fileId: z.string() }, args => service.getText(key, args));
@@ -68,22 +77,22 @@ function createMcp(key: string, service: GoogleWorkspaceHostedService) {
   return server;
 }
 export function createHostedWorkspaceHttpServer(service: GoogleWorkspaceHostedService, boundary: HostedWorkspaceHttpBoundary) {
-  if (!/^[a-z0-9.-]+$/.test(boundary.allowedHost)) throw new Error('CUAN_WORKSPACE_MCP_ALLOWED_HOST must be a canonical hostname');
+  if (!/^[a-z0-9.-]+(?::[1-9][0-9]{0,4})?$/.test(boundary.allowedHost)) throw new Error('CUAN_WORKSPACE_MCP_ALLOWED_HOST must be a canonical hostname');
   if (boundary.ingressSecret.length < 32) throw new Error('CUAN_WORKSPACE_INGRESS_SECRET must contain at least 32 characters');
   return createServer(async (req, res) => {
     const hosts = rawHeader(req, HOST);
     if (hosts.length !== 1 || hosts[0] !== boundary.allowedHost) { fail(res, 421, 'MISDIRECTED_REQUEST'); return; }
-    if (req.url !== '/mcp') { fail(res, 404, 'NOT_FOUND'); return; }
+    if (req.url !== '/mcp' && req.url !== '/legacy/mcp') { fail(res, 404, 'NOT_FOUND'); return; }
     if (req.method !== 'POST') { fail(res, 405, 'METHOD_NOT_ALLOWED'); return; }
     if (!validIngress(req, boundary.ingressSecret)) { fail(res, 401, 'UNAUTHENTICATED'); return; }
     const keys = rawHeader(req, CONNECTION_KEY);
-    if (keys.length !== 1 || !KEY.test(keys[0])) { fail(res, 401, 'UNAUTHENTICATED'); return; }
+    if (req.url === '/mcp' ? keys.length !== 0 : keys.length !== 1 || !KEY.test(keys[0])) { fail(res, 401, 'UNAUTHENTICATED'); return; }
     if (Number(req.headers['content-length'] ?? 0) > 262144) { fail(res, 413, 'REQUEST_TOO_LARGE'); return; }
     if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] ?? '')) { fail(res, 415, 'UNSUPPORTED_MEDIA_TYPE'); return; }
     let body: unknown;
     try { body = await readBody(req); }
     catch (error) { fail(res, error instanceof Error && error.message === 'REQUEST_TOO_LARGE' ? 413 : 400, error instanceof Error && error.message === 'REQUEST_TOO_LARGE' ? 'REQUEST_TOO_LARGE' : 'INVALID_JSON'); return; }
-    const server = createMcp(keys[0], service);
+    const server = createMcp(req.url === '/mcp' ? '' : keys[0], service);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.once('finish', () => { void transport.close(); void server.close(); });
     try { await server.connect(transport); await transport.handleRequest(req, res, body); }

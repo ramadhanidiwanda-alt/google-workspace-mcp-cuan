@@ -20,4 +20,16 @@ describe('CuanWorkspaceRuntimeClient', () => {
     expect(() => new CuanWorkspaceRuntimeClient('http://example.test', 'id', 'secret')).toThrow();
     expect(() => new CuanWorkspaceRuntimeClient('https://example.test', '', 'secret')).toThrow();
   });
+  it('redeems a permit with service credentials and no caller key', async () => {
+    const fetchFn = jest.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ ok: true, accessToken: 'transient' }), { status: 200 }));
+    const client = new CuanWorkspaceRuntimeClient('https://example.supabase.co/functions/v1/google-workspace-runtime', 'private-id', 'private-secret', fetchFn,
+      'https://example.supabase.co/functions/v1/mcp-redeem-google-permit');
+    const googleInvocation = { version: 1, publicTool: 'workspace_drive_list_files', permit: 'opaque' };
+    expect(await client.redeem(googleInvocation)).toMatchObject({ ok: true, accessToken: 'transient' });
+    expect(fetchFn.mock.calls[0][1].headers).not.toHaveProperty('x-cuan-mcp-connection-key');
+    expect(JSON.parse(fetchFn.mock.calls[0][1].body as string)).toEqual({ googleInvocation });
+    await client.finalize({ executionId: 'execution_123', permit: 'opaque' }, 'succeeded');
+    expect(fetchFn.mock.calls[1][0]).toBe('https://example.supabase.co/functions/v1/mcp-finalize-execution');
+    expect(JSON.parse(fetchFn.mock.calls[1][1].body as string)).toEqual({ executionId: 'execution_123', permit: 'opaque', outcome: 'succeeded' });
+  });
 });
