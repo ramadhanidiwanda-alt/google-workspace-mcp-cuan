@@ -6,12 +6,12 @@ COPY workspace-server/package.json workspace-server/package.json
 RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY tsconfig.json ./tsconfig.json
 COPY workspace-server workspace-server
-RUN npm run build:cuan-sheets --workspace=workspace-server
+RUN npm run build:cuan-workspace --workspace=workspace-server
 
 FROM node:24-bookworm-slim
-ENV NODE_ENV=production CUAN_SHEETS_MCP_ENABLED=false HOST=0.0.0.0 PORT=8080
+ENV NODE_ENV=production CUAN_WORKSPACE_MCP_ENABLED=false HOST=0.0.0.0 PORT=8080
 WORKDIR /app
-COPY --from=build --chown=node:node /app/workspace-server/dist/cuan-sheets.js ./cuan-sheets.js
+COPY --from=build --chown=node:node /app/workspace-server/dist/cuan-workspace.js ./cuan-workspace.js
 USER node
 EXPOSE 8080
-CMD ["node", "cuan-sheets.js"]
+CMD ["node", "cuan-workspace.js"]
