@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, it, jest } from '@jest/globals';
+import { createHash } from 'node:crypto';
 import { GoogleWorkspaceHostedService } from '../../hostedWorkspace/GoogleWorkspaceHostedService';
 import type { WorkspaceRuntime } from '../../hostedWorkspace/CuanWorkspaceRuntimeClient';
 
@@ -23,6 +24,26 @@ function runtime(override?: (action: string, request: Record<string, unknown>) =
 }
 
 describe('GoogleWorkspaceHostedService', () => {
+  it('checks exact canonical bytes before redeeming a unified permit', async () => {
+    const connectionId = '123e4567-e89b-42d3-a456-426614174000';
+    const raw = JSON.stringify({ connectionId, pageSize: 5 });
+    const invocation = { version: 1, publicTool: 'workspace_drive_list_files', provider: 'google_workspace',
+      resourceId: connectionId, canonicalArgumentsJson: raw,
+      digest: createHash('sha256').update(Buffer.from(raw, 'utf8')).digest('hex'),
+      executionId: 'execution_123', permit: 'p'.repeat(43) };
+    const redeem = jest.fn(async () => ({ ok: true, provider: 'google_workspace', resourceId: connectionId,
+      connectionId, accessToken: token }));
+    const finalize = jest.fn(async (_invocation: Record<string, unknown>, _outcome: string) => undefined);
+    const fetchFn = jest.fn(async () => json({ files: [{ id, name: 'Owned' }] }));
+    const service = new GoogleWorkspaceHostedService({ runtime: { invoke: jest.fn(), redeem, finalize } as any, fetchFn });
+    await expect(service.invokeUnified(invocation.publicTool, { ...invocation, canonicalArgumentsJson: raw + ' ' }))
+      .rejects.toMatchObject({ code: 'CUAN_INVOCATION_INVALID' });
+    expect(redeem).not.toHaveBeenCalled();
+    expect(await service.invokeUnified(invocation.publicTool, invocation)).toMatchObject({ files: [{ id, name: 'Owned' }] });
+    expect(redeem).toHaveBeenCalledTimes(1);
+    expect(finalize).toHaveBeenCalledWith(invocation, 'succeeded');
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
   it('binds every read to Cuan and redacts credentials from output', async () => {
     const auth = runtime();
     const fetchFn = jest.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {

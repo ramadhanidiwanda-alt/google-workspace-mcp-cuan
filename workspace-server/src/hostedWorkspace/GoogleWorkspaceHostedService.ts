@@ -61,6 +61,125 @@ function exactCredential(raw: Record<string, unknown>, binding: Binding, now: nu
 
 export class GoogleWorkspaceHostedService {
   constructor(private readonly deps: { runtime: WorkspaceRuntime; fetchFn?: typeof fetch; now?: () => number }) {}
+
+  async invokeUnified(tool: string, invocation: Record<string, unknown>): Promise<unknown> {
+    const state = { validated: false, redeemed: false, mutationDispatched: false };
+    let result: unknown;
+    let failure: unknown;
+    try { result = await this.executeUnified(tool, invocation, state); }
+    catch (error) { failure = error; }
+    if (state.validated) {
+      if (!this.deps.runtime.finalize) throw new HostedWorkspaceError('CUAN_FINALIZATION_UNAVAILABLE');
+      const outcome = failure ? (state.mutationDispatched ? 'failed_after_dispatch' : 'failed_before_dispatch') : 'succeeded';
+      try { await this.deps.runtime.finalize(invocation, outcome); }
+      catch { throw new HostedWorkspaceError('CUAN_FINALIZATION_UNKNOWN'); }
+    }
+    if (failure) throw failure;
+    return result;
+  }
+
+  private async executeUnified(tool: string, invocation: Record<string, unknown>, state: { validated: boolean; redeemed: boolean; mutationDispatched: boolean }): Promise<unknown> {
+    if (!Object.values(TOOLS).includes(tool as typeof TOOLS[keyof typeof TOOLS]) ||
+      invocation.version !== 1 || invocation.publicTool !== tool || invocation.provider !== 'google_workspace' ||
+      typeof invocation.resourceId !== 'string' || typeof invocation.canonicalArgumentsJson !== 'string' ||
+      typeof invocation.digest !== 'string' || !/^[0-9a-f]{64}$/.test(invocation.digest) ||
+      typeof invocation.executionId !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(invocation.executionId) ||
+      typeof invocation.permit !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(invocation.permit) ||
+      Buffer.byteLength(invocation.canonicalArgumentsJson) > 65536 ||
+      createHash('sha256').update(Buffer.from(invocation.canonicalArgumentsJson, 'utf8')).digest('hex') !== invocation.digest)
+      throw new HostedWorkspaceError('CUAN_INVOCATION_INVALID');
+    let args: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(invocation.canonicalArgumentsJson);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+      args = parsed as Record<string, unknown>;
+    } catch { throw new HostedWorkspaceError('CUAN_ARGUMENTS_INVALID'); }
+    if (args.connectionId !== invocation.resourceId || !UUID.test(invocation.resourceId)) throw new HostedWorkspaceError('CUAN_TARGET_MISMATCH');
+    state.validated = true;
+    if (!this.deps.runtime.redeem) throw new HostedWorkspaceError('CUAN_REDEEM_UNAVAILABLE');
+    let grant: Record<string, unknown>;
+    try { grant = await this.deps.runtime.redeem(invocation); }
+    catch { throw new HostedWorkspaceError('CUAN_REDEEM_DENIED'); }
+    state.redeemed = true;
+    if (grant.provider !== 'google_workspace' || grant.resourceId !== invocation.resourceId ||
+      grant.connectionId !== invocation.resourceId || typeof grant.accessToken !== 'string' ||
+      !grant.accessToken || grant.accessToken.length > 8192) throw new HostedWorkspaceError('CUAN_BINDING_MISMATCH');
+    const token = grant.accessToken;
+    const previewBinding = () => {
+      if (typeof grant.previewId !== 'string' || !grant.previewId ||
+        typeof grant.approvalDigest !== 'string' || !/^[0-9a-f]{64}$/.test(grant.approvalDigest))
+        throw new HostedWorkspaceError('CUAN_PREVIEW_BINDING_MISSING');
+      return { previewId: grant.previewId, approvalDigest: grant.approvalDigest, requiresConfirmation: true };
+    };
+    if (tool === TOOLS.list) {
+      const pageSize = args.pageSize ?? 50;
+      if (!Number.isInteger(pageSize) || (pageSize as number) < 1 || (pageSize as number) > 100 ||
+        args.pageToken !== undefined && (typeof args.pageToken !== 'string' || args.pageToken.length > 1000)) throw new HostedWorkspaceError('INVALID_PAGE');
+      const query = new URLSearchParams({ pageSize: String(pageSize), q: 'trashed = false', fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,description,parents)', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true' });
+      if (args.pageToken) query.set('pageToken', args.pageToken as string);
+      const data = (await this.provider(token, `https://www.googleapis.com/drive/v3/files?${query}`)).json;
+      if (!data || !Array.isArray(data.files) || data.files.length > (pageSize as number)) throw new HostedWorkspaceError('PROVIDER_INVALID_LIST');
+      return { files: data.files, nextPageToken: data.nextPageToken ?? null };
+    }
+    if (tool === TOOLS.file || tool === TOOLS.text) {
+      const id = fileId(args.fileId);
+      if (tool === TOOLS.file) return { file: await this.metadata(token, id) };
+      const value = await this.fileText(token, id);
+      return { fileId: id, name: value.metadata.name, mimeType: value.metadata.mimeType, content: value.content };
+    }
+    if (tool === TOOLS.sheetRead) {
+      const id = fileId(args.spreadsheetId), range = text(args.range, 128), dims = shape(range);
+      const data = (await this.provider(token, `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(range)}?majorDimension=ROWS&valueRenderOption=FORMULA`)).json;
+      if (!data) throw new HostedWorkspaceError('PROVIDER_INVALID_VALUES');
+      return { spreadsheetId: id, range, values: grid(data.values ?? [], dims) };
+    }
+    const confirmed = args.confirmed === true;
+    if (confirmed && (typeof args.previewId !== 'string' || args.previewId !== grant.previewId ||
+      typeof args.approvalDigest !== 'string' || args.approvalDigest !== grant.approvalDigest ||
+      !/^[0-9a-f]{64}$/.test(args.approvalDigest))) throw new HostedWorkspaceError('CUAN_WRITE_CLAIM_MISMATCH');
+    if (tool === TOOLS.create) {
+      const name = text(args.name, 200).trim(), content = text(args.content);
+      if (!name || /[\/\\]/.test(name)) throw new HostedWorkspaceError('INVALID_NAME');
+      const parentId = args.parentId === undefined ? undefined : fileId(args.parentId);
+      if (!confirmed) return { name, parentId: parentId ?? 'root', contentLength: content.length, ...previewBinding() };
+      const boundary = `cuan_${randomUUID().replace(/-/g, '')}`;
+      const metadata = JSON.stringify({ name, mimeType: 'text/plain', ...(parentId ? { parents: [parentId] } : {}) });
+      const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n${content}\r\n--${boundary}--`;
+      try {
+        state.mutationDispatched = true;
+        const raw = (await this.provider(token, 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,webViewLink', 'POST', body, `multipart/related; boundary=${boundary}`)).json;
+        if (!raw || typeof raw.id !== 'string' || !ID.test(raw.id)) throw new Error();
+        const current = await this.fileText(token, raw.id);
+        if (current.content !== content || current.metadata.name !== name) throw new Error();
+        return { status: 'CONFIRMED', fileId: raw.id, executionId: invocation.executionId };
+      } catch { throw new HostedWorkspaceError('PROVIDER_OUTCOME_UNKNOWN'); }
+    }
+    if (tool === TOOLS.update) {
+      const id = fileId(args.fileId), expected = text(args.expectedOldText), replacement = text(args.newText);
+      const before = await this.fileText(token, id);
+      if (before.metadata.mimeType !== 'text/plain' || before.content !== expected) throw new HostedWorkspaceError('STALE_CONTENT');
+      if (!confirmed) return { fileId: id, before: expected, proposed: replacement, ...previewBinding() };
+      try {
+        state.mutationDispatched = true;
+        const raw = (await this.provider(token, `https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media&supportsAllDrives=true&fields=id,name,mimeType`, 'PATCH', replacement, 'text/plain; charset=UTF-8')).json;
+        if (!raw || raw.id !== id || (await this.fileText(token, id)).content !== replacement) throw new Error();
+        return { status: 'CONFIRMED', fileId: id, executionId: invocation.executionId };
+      } catch { throw new HostedWorkspaceError('PROVIDER_OUTCOME_UNKNOWN'); }
+    }
+    const id = fileId(args.spreadsheetId), range = text(args.range, 128), dims = shape(range);
+    const expected = grid(args.expectedOldValues, dims, true), replacement = grid(args.newValues, dims, true);
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(range)}`;
+    const before = (await this.provider(token, `${url}?majorDimension=ROWS&valueRenderOption=FORMULA`)).json;
+    if (!before || sha(grid(before.values ?? [], dims)) !== sha(expected)) throw new HostedWorkspaceError('STALE_CONTENT');
+    if (!confirmed) return { spreadsheetId: id, range, before: expected, proposed: replacement, ...previewBinding() };
+    try {
+      state.mutationDispatched = true;
+      const raw = (await this.provider(token, `${url}?valueInputOption=RAW`, 'PUT', JSON.stringify({ majorDimension: 'ROWS', values: replacement }), 'application/json')).json;
+      const after = (await this.provider(token, `${url}?majorDimension=ROWS&valueRenderOption=FORMULA`)).json;
+      if (!raw || !after || sha(grid(after.values ?? [], dims)) !== sha(replacement)) throw new Error();
+      return { status: 'CONFIRMED', spreadsheetId: id, range, executionId: invocation.executionId };
+    } catch { throw new HostedWorkspaceError('PROVIDER_OUTCOME_UNKNOWN'); }
+  }
   private now() { return (this.deps.now ?? Date.now)(); }
   private checkKey(key: string) { if (!KEY.test(key)) throw new HostedWorkspaceError('UNAUTHENTICATED'); }
   private binding(toolName: string, targetId: string, input: unknown, executionId = randomUUID()): Binding {
